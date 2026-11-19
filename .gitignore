@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[oc]
+*.egg-info/
+build/
+dist/
+wheels/
+
+# Окружение
+.venv/
+.idea/
+
+# Кэш
+.ruff_cache/
+.pytest_cache/
+
+# Инструменты
+/graft/
+.opencode/
+
+# Артефакты (содержимое игнорируется, папка сохраняется через .gitkeep)
+/artifacts/*
+!/artifacts/.gitkeep
+
+# Дата (содержимое игнорируется, папка сохраняется через .gitkeep)
+/data/raw/*
+!/data/raw/.gitkeep
+/data/processed/
