@@ -18,18 +18,6 @@
 - **GPU:** полное обучение модели на CUDA занимает около 10-15мин
 - **Bake:** чтобы не упираться в CPU-Bound при декодировании и чтении, сначала данные запекаются в uint8 тензоры (7-10мин / 10ГБ)
 
-## Решение
-
-Основные этапы:
-
-1. **Data Ingestion** — загрузка с Kaggle в `data/raw/`
-2. **Data Audit** — проверка данных, структуры и разметки 
-3. **EDA** — исследование распределений, дубликатов и метаданных изображений
-4. **Preprocessing** — ресайз, центрирование, нормализация по статистикам, аугментация
-5. **Training** — модель `MobileNetV3-Small` с 3-fold CV, есть чекпоинты после каждой эпохи
-8. **Evaluation** — оценка качества модели, OOF метрики по группам (`known / unseen_identity / new_whale`)
-9. **Prediction** — `artifacts/submission.csv` (top-5 кандидатов на тесте)
-
 Параметры препроцессинга и обучения лежат в `config.yaml`
 
 ## Установка и запуск
@@ -52,19 +40,9 @@ uv run python -m src.models.model_evaluation      # оценка
 uv run python -m src.models.model_prediction      # предсказания 
 ```
 
-## Если важно как в ТЗ можно ввести
+## Есть шимы, если важно, чтобы команды были как в ТЗ
 
 ```bash
 uv run python -m src.get_data
 uv run python -m src.train
 ```
-
-## Результаты
-
-- `artifacts/model.pkl` — обученная модель
-- `artifacts/metrics.json` — метрики
-- `artifacts/oof.json` — out-of-fold предсказания
-- `artifacts/submission.csv` — submission на тесте
-- `artifacts/checkpoints/fit_model.pt` — чекпоинты
-- `artifacts/logs/` — логи обучения
-- `artifacts/eda/` — артефакты eda
