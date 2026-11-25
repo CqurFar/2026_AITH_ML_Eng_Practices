@@ -106,7 +106,7 @@ def test_train_reuses_one_preprocessing_instance(
         config_module.load_config()["preprocessing"]["target_height"] = 1
         return [prediction], {"map_at_5": 1.0}, 0.5
 
-    def fake_fit_model(_rows, _classes, _config, _device, _seed, preprocessing):
+    def fake_fit_model(_rows, _classes, _config, _device, _seed, preprocessing, **_kwargs):
         seen["fit"] = preprocessing
         return nn.Linear(1, 1), []
 
@@ -141,7 +141,7 @@ def test_evaluate_fold_shares_preprocessing_with_fit_and_oof(
     preprocessing = PreprocessingConfig()
     seen = []
 
-    def fake_fit_model(_rows, _classes, _config, _device, _seed, preprocessing):
+    def fake_fit_model(_rows, _classes, _config, _device, _seed, preprocessing, **_kwargs):
         seen.append(preprocessing)
         return nn.Linear(1, 1), []
 

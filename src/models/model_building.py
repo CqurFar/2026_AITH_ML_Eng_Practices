@@ -3,13 +3,14 @@ import hashlib
 import json
 import logging
 import platform
+import shutil
 import statistics
 import subprocess
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from math import isfinite
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from time import perf_counter
 from typing import cast
 
@@ -36,6 +37,115 @@ from src.preprocessing import WhaleDataset
 from src.steps import step
 
 logger = logging.getLogger(__name__)
+
+
+class CheckpointError(RuntimeError):
+    pass
+
+
+class CheckpointMismatchError(CheckpointError):
+    pass
+
+
+class CheckpointCorruptError(CheckpointError):
+    pass
+
+
+def _fingerprint(value: object) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _config_settings(config: TrainingConfig) -> dict[str, object]:
+    return {
+        key: str(value) if isinstance(value, Path) else value
+        for key, value in asdict(config).items()
+    }
+
+
+def _split_fingerprint(
+    config: TrainingConfig,
+    role: str,
+    fold: int | None,
+    rows: list[tuple[str, str]],
+) -> str:
+    path = config.processed_dir / "splits_manifest.json"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return _fingerprint([list(row) for row in rows])
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid splits manifest {path}") from exc
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("fingerprint"), str):
+        raise ValueError(f"Invalid splits manifest {path}: missing data fingerprint")
+    membership = None
+    if role == "fold":
+        folds = manifest.get("folds")
+        if not isinstance(folds, list) or fold is None or not 1 <= fold <= len(folds):
+            raise ValueError(f"Invalid splits manifest {path}: missing fold {fold}")
+        membership = folds[fold - 1]
+    return _fingerprint(
+        {
+            "rows": [list(row) for row in rows],
+            "data": manifest["fingerprint"],
+            "fold": membership,
+        }
+    )
+
+
+def fit_context(
+    *,
+    role: str,
+    fold: int | None,
+    seed: int,
+    rows: list[tuple[str, str]],
+    classes: list[str],
+    config: TrainingConfig,
+    preprocessing: PreprocessingConfig,
+) -> dict[str, object]:
+    if role not in {"fold", "final"}:
+        raise ValueError("role must be 'fold' or 'final'")
+    if (role == "fold") != (fold is not None):
+        raise ValueError("fold checkpoints require a fold; final checkpoints do not")
+    return {
+        "role": role,
+        "fold": fold,
+        "seed": seed,
+        "epochs": config.epochs,
+        "data_fingerprint": _file_sha256(config.data_dir / "train.csv"),
+        "split_fingerprint": _split_fingerprint(config, role, fold, rows),
+        "preprocessing_fingerprint": _fingerprint(preprocessing.to_dict()),
+        "classes": list(classes),
+        "architecture": {
+            "name": "mobilenet_v3_small",
+            "num_classes": len(classes),
+            "pretrained": config.pretrained,
+            "dropout": config.dropout,
+            "unfrozen_blocks": config.unfrozen_blocks,
+        },
+        "optimizer": {
+            "name": "AdamW",
+            "head_lr": config.head_lr,
+            "backbone_lr": config.backbone_lr,
+            "weight_decay": config.weight_decay,
+        },
+        "scheduler": {"name": "CosineAnnealingLR", "T_max": config.epochs},
+        "config_fingerprint": _fingerprint(_config_settings(config)),
+    }
+
+
+def checkpoint_path(config: TrainingConfig, context: dict[str, object]) -> Path:
+    fold = context["fold"]
+    label = "final" if context["role"] == "final" else str(fold)
+    return config.checkpoints_dir / f"fit_{context['role']}_{label}_{_fingerprint(context)}.pt"
 
 
 def _file_logger(config: TrainingConfig, name: str) -> logging.Logger:
@@ -73,23 +183,15 @@ def model_artifact(
     device: torch.device,
     run_id: str,
 ) -> dict[str, object]:
-    settings = {
-        key: str(value) if isinstance(value, Path) else value
-        for key, value in asdict(config).items()
-    }
-    canonical_config = json.dumps(
-        settings, sort_keys=True, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8")
+    settings = _config_settings(config)
     return {
         "run_id": run_id,
         "state_dict": model.cpu().state_dict(),
         "preprocessing": preprocessing.to_dict(),
         "classes": list(classes),
         "threshold": threshold,
-        "data_fingerprint": hashlib.sha256(
-            (config.data_dir / "train.csv").read_bytes()
-        ).hexdigest(),
-        "config_fingerprint": hashlib.sha256(canonical_config).hexdigest(),
+        "data_fingerprint": _file_sha256(config.data_dir / "train.csv"),
+        "config_fingerprint": _fingerprint(settings),
         "environment": {
             "platform": platform.platform(),
             "python": platform.python_version(),
@@ -104,47 +206,87 @@ def model_artifact(
 
 
 def _save_checkpoint(
-    config: TrainingConfig,
+    path: Path,
+    context: dict[str, object],
     epoch: int,
     model: nn.Module,
     optimizer: torch.optim.AdamW,
     scheduler: torch.optim.lr_scheduler.CosineAnnealingLR,
     history: list[dict[str, float]],
 ) -> None:
-    path = config.checkpoints_dir / "fit_model.pt"
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "scheduler_state_dict": scheduler.state_dict(),
-            "history": history,
-        },
-        path,
-    )
+    with NamedTemporaryFile(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+    ) as file:
+        temporary = Path(file.name)
+    try:
+        torch.save(
+            {
+                "context": context,
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "history": history,
+            },
+            temporary,
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _load_checkpoint(
-    config: TrainingConfig,
+    path: Path,
+    context: dict[str, object],
     model: nn.Module,
     optimizer: torch.optim.AdamW,
     scheduler: torch.optim.lr_scheduler.CosineAnnealingLR,
     history: list[dict[str, float]],
 ) -> int:
-    path = config.checkpoints_dir / "fit_model.pt"
     if not path.exists():
         return 0
     try:
-        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        raise CheckpointCorruptError(f"Corrupt checkpoint {path}: {exc}") from exc
+    if not isinstance(checkpoint, dict) or "context" not in checkpoint:
+        raise CheckpointCorruptError(f"Corrupt checkpoint {path}: missing fit context")
+    stored_context = checkpoint["context"]
+    if not isinstance(stored_context, dict):
+        raise CheckpointCorruptError(f"Corrupt checkpoint {path}: invalid fit context")
+    if stored_context != context:
+        different = sorted(
+            (
+                key
+                for key in stored_context.keys() | context.keys()
+                if stored_context.get(key) != context.get(key)
+            ),
+            key=str,
+        )
+        raise CheckpointMismatchError(
+            f"Checkpoint context mismatch for {path}: {', '.join(map(str, different))}"
+        )
+    try:
+        epoch = checkpoint["epoch"]
+        if type(epoch) is not int or epoch < 0:
+            raise ValueError("epoch must be a nonnegative integer")
+        epochs = context.get("epochs")
+        if type(epochs) is not int or epoch >= epochs:
+            raise ValueError("epoch is outside the configured training run")
+        stored_history = checkpoint["history"]
+        if not isinstance(stored_history, list) or len(stored_history) != epoch + 1:
+            raise ValueError("history does not match the checkpoint epoch")
+        for expected, entry in enumerate(stored_history, start=1):
+            if not isinstance(entry, dict) or entry.get("epoch") != float(expected):
+                raise ValueError("history epochs are not sequential")
         model.load_state_dict(checkpoint["model_state_dict"])
-    except RuntimeError:
-        path.unlink(missing_ok=True)
-        return 0
-    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    except Exception as exc:
+        raise CheckpointCorruptError(f"Corrupt checkpoint {path}: {exc}") from exc
     history.extend(checkpoint["history"])
-    return int(checkpoint["epoch"]) + 1
+    return epoch + 1
 
 
 def fit_model(
@@ -154,6 +296,9 @@ def fit_model(
     device: torch.device,
     seed: int,
     preprocessing: PreprocessingConfig,
+    *,
+    role: str = "final",
+    fold: int | None = None,
 ) -> tuple[nn.Module, list[dict[str, float]]]:
     class_index = {label: index for index, label in enumerate(classes)}
     if not rows or not classes or len(class_index) != len(classes):
@@ -175,6 +320,16 @@ def fit_model(
     if not 0 <= config.label_smoothing <= 1:
         raise ValueError("label_smoothing must be in [0, 1]")
 
+    context = fit_context(
+        role=role,
+        fold=fold,
+        seed=seed,
+        rows=rows,
+        classes=classes,
+        config=config,
+        preprocessing=preprocessing,
+    )
+    path = checkpoint_path(config, context)
     torch.manual_seed(seed)
     use_cuda = device.type == "cuda"
     records = [
@@ -213,7 +368,7 @@ def fit_model(
     criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
     trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
     history: list[dict[str, float]] = []
-    start_epoch = _load_checkpoint(config, model, optimizer, scheduler, history)
+    start_epoch = _load_checkpoint(path, context, model, optimizer, scheduler, history)
     log = _file_logger(config, "fit_model.log")
     log.info(
         "start_epoch=%d epochs=%d rows=%d device=%s",
@@ -268,7 +423,7 @@ def fit_model(
             entry["backbone_lr"],
         )
         scheduler.step()
-        _save_checkpoint(config, epoch, model, optimizer, scheduler, history)
+        _save_checkpoint(path, context, epoch, model, optimizer, scheduler, history)
     return model, history
 
 
@@ -317,7 +472,16 @@ def evaluate_fold(
     classes = sorted({label for _, label in train_rows})
     seed = config.seed + fold
     calibration, evaluation = calibration_split(split.known, split.unseen, seed, 0.4)
-    model, history = fit_model(train_rows, classes, config, device, seed, preprocessing)
+    model, history = fit_model(
+        train_rows,
+        classes,
+        config,
+        device,
+        seed,
+        preprocessing,
+        role="fold",
+        fold=fold,
+    )
     known_names = {record.image for record in split.known}
 
     def target(record: Record) -> str:
@@ -366,6 +530,70 @@ def code_version() -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _atomic_json(path: Path, content: object) -> None:
+    text = json.dumps(content, indent=2, allow_nan=False) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="\n",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as file:
+        temporary = Path(file.name)
+    try:
+        temporary.write_text(text, encoding="utf-8", newline="\n")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _publish_run(
+    config: TrainingConfig,
+    run_id: str,
+    artifact: dict[str, object],
+    metrics: dict[str, object],
+    oof: list[Prediction],
+) -> tuple[Path, str]:
+    runs_dir = config.artifacts_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = runs_dir / run_id
+    if run_dir.exists():
+        raise FileExistsError(f"Run directory already exists: {run_dir}")
+    with TemporaryDirectory(prefix=".run-", dir=runs_dir) as stage:
+        staged = Path(stage)
+        torch.save(artifact, staged / "model.pkl")
+        for filename, content in (("metrics.json", metrics), ("oof.json", oof)):
+            (staged / filename).write_text(
+                json.dumps(content, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+            )
+        _atomic_json(staged / "environment.json", artifact["environment"])
+        filenames = ("model.pkl", "metrics.json", "oof.json", "environment.json")
+        manifest = {
+            "version": 1,
+            "run_id": run_id,
+            "files": {filename: _file_sha256(staged / filename) for filename in filenames},
+        }
+        _atomic_json(staged / "manifest.json", manifest)
+        if run_dir.exists():
+            raise FileExistsError(f"Run directory already exists: {run_dir}")
+        # shortcut: single-process publication; concurrent publishers need a no-replace rename.
+        staged.replace(run_dir)
+    return run_dir, _file_sha256(run_dir / "manifest.json")
+
+
+def _publish_compatibility(config: TrainingConfig, run_dir: Path) -> None:
+    filenames = ("model.pkl", "metrics.json", "oof.json")
+    with TemporaryDirectory(prefix=".compat-", dir=config.artifacts_dir) as stage:
+        staged = Path(stage)
+        for filename in filenames:
+            shutil.copyfile(run_dir / filename, staged / filename)
+        for filename in filenames:
+            (staged / filename).replace(config.artifacts_dir / filename)
+
+
 def train(config: TrainingConfig | None = None) -> dict[str, object]:
     config = config or training_config()
     preprocessing = PreprocessingConfig()
@@ -405,7 +633,7 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
     model, history = fit_model(
         sorted(records.items()), classes, config, device, config.seed, preprocessing
     )
-    run_id = datetime.now(UTC).isoformat()
+    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     threshold = statistics.median(thresholds)
     artifact = model_artifact(
         model,
@@ -434,19 +662,18 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
         "final_history": history,
         "threshold": threshold,
     }
-    config.artifacts_dir.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(dir=config.artifacts_dir) as stage:
-        staged = Path(stage)
-        torch.save(artifact, staged / "model.pkl")
-        for filename, content in (("metrics.json", metrics), ("oof.json", all_predictions)):
-            (staged / filename).write_text(
-                json.dumps(content, indent=2, allow_nan=False) + "\n", encoding="utf-8"
-            )
-        (config.artifacts_dir / "metrics.json").unlink(missing_ok=True)
-        for filename in ("model.pkl", "oof.json", "metrics.json"):
-            (staged / filename).replace(config.artifacts_dir / filename)
+    run_dir, manifest_sha256 = _publish_run(config, run_id, artifact, metrics, all_predictions)
+    _publish_compatibility(config, run_dir)
+    _atomic_json(
+        config.artifacts_dir / "latest.json",
+        {
+            "run_id": run_id,
+            "manifest": run_dir.relative_to(config.artifacts_dir).as_posix(),
+            "manifest_sha256": manifest_sha256,
+        },
+    )
     print(json.dumps(summarize(all_predictions), indent=2), flush=True)
-    print(f"Artifacts saved to {config.artifacts_dir}", flush=True)
+    print(f"Artifacts saved to {run_dir}", flush=True)
     return metrics
 
 

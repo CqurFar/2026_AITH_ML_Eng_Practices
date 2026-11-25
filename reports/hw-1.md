@@ -12,11 +12,13 @@
 
 ## Результаты
 
-- `artifacts/model.pkl` — обученная модель
-- `artifacts/metrics.json` — метрики
-- `artifacts/oof.json` — out-of-fold предсказания
+- `artifacts/model.pkl` — обученная модель (совместимый output)
+- `artifacts/metrics.json` — метрики (совместимый output)
+- `artifacts/oof.json` — out-of-fold предсказания (совместимый output)
+- `artifacts/runs/<run_id>/` — неизменяемый run bundle с `manifest.json` и хешами артефактов
+- `artifacts/latest.json` — атомарный указатель на последний опубликованный run
 - `artifacts/submission.csv` — submission на тесте
-- `artifacts/checkpoints/fit_model.pt` — чекпоинты
+- `artifacts/checkpoints/` — контекстно-изолированные чекпоинты
 - `artifacts/logs/` — логи обучения
 - `artifacts/eda/` — артефакты eda
 
