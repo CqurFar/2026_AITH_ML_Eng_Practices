@@ -97,6 +97,61 @@ def test_raw_output_overlap_raises(raw: Path, processed: Path, artifacts: Path) 
         )
 
 
+def test_preprocessing_no_argument_defaults_match_config() -> None:
+    config = config_module.PreprocessingConfig()
+    section = config_module.load_config()["preprocessing"]
+    assert config.data_dir == config_module.ROOT / str(section["data_dir"])
+    assert config.train_dir == config_module.ROOT / str(section["train_dir"])
+    assert config.to_dict() == {
+        "target_height": 256,
+        "target_width": 512,
+        "interpolation": "bilinear",
+        "mean": [0.485, 0.456, 0.406],
+        "std": [0.229, 0.224, 0.225],
+    }
+
+
+def test_preprocessing_relative_overrides_resolve_from_repo_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = config_module.PreprocessingConfig(
+        data_dir=Path("data/raw/custom"),
+        train_dir=Path("data/processed/custom/train"),
+    )
+    assert config.data_dir == config_module.ROOT / "data/raw/custom"
+    assert config.train_dir == config_module.ROOT / "data/processed/custom/train"
+
+
+def test_preprocessing_absolute_overrides_are_preserved(tmp_path: Path) -> None:
+    data_dir = tmp_path / "raw"
+    train_dir = tmp_path / "processed" / "train"
+    config = config_module.PreprocessingConfig(data_dir=data_dir, train_dir=train_dir)
+    assert config.data_dir == data_dir
+    assert config.train_dir == train_dir
+
+
+def test_preprocessing_data_override_keeps_default_train_dir(tmp_path: Path) -> None:
+    data_dir = tmp_path / "raw"
+    section = config_module.load_config()["preprocessing"]
+    config = config_module.PreprocessingConfig(data_dir=data_dir)
+    assert config.data_dir == data_dir
+    assert config.train_dir == config_module.ROOT / str(section["train_dir"])
+
+
+def test_preprocessing_train_override_keeps_default_data_dir(tmp_path: Path) -> None:
+    train_dir = tmp_path / "processed" / "train"
+    section = config_module.load_config()["preprocessing"]
+    config = config_module.PreprocessingConfig(train_dir=train_dir)
+    assert config.data_dir == config_module.ROOT / str(section["data_dir"])
+    assert config.train_dir == train_dir
+
+
+def test_preprocessing_path_overrides_are_keyword_only(tmp_path: Path) -> None:
+    with pytest.raises(TypeError):
+        config_module.PreprocessingConfig(tmp_path, tmp_path)
+
+
 def test_import_does_not_read_config_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     real_read_text = Path.read_text
     reads: list[Path] = []

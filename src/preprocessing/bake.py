@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import polars as pl
@@ -46,7 +47,11 @@ def _train_records(config: PreprocessingConfig) -> list[Record]:
 
 @step("preprocess")
 def main() -> None:
-    config = PreprocessingConfig()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--train-dir", type=Path)
+    args = parser.parse_args()
+    config = PreprocessingConfig(data_dir=args.data_dir, train_dir=args.train_dir)
     count = bake(_train_records(config), config)
     print(f"baked {count} images to {config.train_dir}")
 
