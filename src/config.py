@@ -120,6 +120,7 @@ class PreprocessingConfig:
         section = _section("preprocessing")
         self.data_dir = _resolve(data_dir) if data_dir is not None else _p(section, "data_dir")
         self.train_dir = _resolve(train_dir) if train_dir is not None else _p(section, "train_dir")
+        _reject_overlap(self.data_dir, [self.train_dir])
         self.target_height = int(section["target_height"])
         self.target_width = int(section["target_width"])
         self.interpolation = str(section["interpolation"])

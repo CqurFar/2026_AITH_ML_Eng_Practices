@@ -97,6 +97,19 @@ def test_raw_output_overlap_raises(raw: Path, processed: Path, artifacts: Path) 
         )
 
 
+@pytest.mark.parametrize(
+    ("raw", "train"),
+    [
+        (Path("data/raw/x"), Path("data/raw/x")),
+        (Path("data/raw/x"), Path("data/raw/x/train")),
+        (Path("data/processed/x/train"), Path("data/processed/x")),
+    ],
+)
+def test_preprocessing_raw_output_overlap_raises(raw: Path, train: Path) -> None:
+    with pytest.raises(ValueError, match="overlap"):
+        config_module.PreprocessingConfig(data_dir=raw, train_dir=train)
+
+
 def test_preprocessing_no_argument_defaults_match_config() -> None:
     config = config_module.PreprocessingConfig()
     section = config_module.load_config()["preprocessing"]

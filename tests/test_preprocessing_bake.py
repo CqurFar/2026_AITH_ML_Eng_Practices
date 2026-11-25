@@ -7,6 +7,23 @@ from src.preprocessing.bake import main as bake_main
 from tests.helpers.synthetic_data import make_synthetic_dataset
 
 
+def test_bake_cli_rejects_overlapping_data_and_train_dirs(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_synthetic_dataset(tmp_path / "raw", n_identities=1, images_per_identity=1)
+    output = root / "baked"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["bake", "--data-dir", str(root), "--train-dir", str(output)],
+    )
+
+    with pytest.raises(ValueError, match="overlap"):
+        bake_main()
+
+    assert not output.exists()
+
+
 def test_bake_cli_uses_overridden_data_and_train_dirs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
