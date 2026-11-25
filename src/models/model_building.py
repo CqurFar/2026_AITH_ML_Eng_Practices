@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import json
 import logging
 import platform
@@ -8,7 +7,6 @@ import statistics
 import subprocess
 from collections import defaultdict
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
 from math import isfinite
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
@@ -22,6 +20,7 @@ from torchvision import __version__ as torchvision_version
 from torchvision import models
 from torchvision.models.mobilenetv3 import MobileNetV3
 from tqdm import tqdm
+from utils import file_logger, fingerprint, sha256_file, utc_run_id, write_json_atomic
 
 from src.config import COMPETITION, CUDAConfig, PreprocessingConfig, TrainingConfig, training_config
 from src.data import Record, Split
@@ -51,19 +50,6 @@ class CheckpointMismatchError(CheckpointError):
 
 class CheckpointCorruptError(CheckpointError):
     pass
-
-
-def _fingerprint(value: object) -> str:
-    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _config_settings(config: TrainingConfig) -> dict[str, object]:
@@ -96,7 +82,7 @@ def _split_fingerprint(
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return _fingerprint([list(row) for row in rows])
+        return fingerprint([list(row) for row in rows])
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Invalid splits manifest {path}") from exc
     if not isinstance(manifest, dict) or not isinstance(manifest.get("fingerprint"), str):
@@ -107,7 +93,7 @@ def _split_fingerprint(
         if not isinstance(folds, list) or fold is None or not 1 <= fold <= len(folds):
             raise ValueError(f"Invalid splits manifest {path}: missing fold {fold}")
         membership = folds[fold - 1]
-    return _fingerprint(
+    return fingerprint(
         {
             "rows": [list(row) for row in rows],
             "data": manifest["fingerprint"],
@@ -135,9 +121,9 @@ def fit_context(
         "fold": fold,
         "seed": seed,
         "epochs": config.epochs,
-        "data_fingerprint": _file_sha256(config.data_dir / "train.csv"),
+        "data_fingerprint": sha256_file(config.data_dir / "train.csv"),
         "split_fingerprint": _split_fingerprint(config, role, fold, rows),
-        "preprocessing_fingerprint": _fingerprint(preprocessing.to_dict()),
+        "preprocessing_fingerprint": fingerprint(preprocessing.to_dict()),
         "classes": list(classes),
         "architecture": {
             "name": "mobilenet_v3_small",
@@ -153,28 +139,18 @@ def fit_context(
             "weight_decay": config.weight_decay,
         },
         "scheduler": {"name": "CosineAnnealingLR", "T_max": config.epochs},
-        "config_fingerprint": _fingerprint(_config_settings(config)),
+        "config_fingerprint": fingerprint(_config_settings(config)),
     }
 
 
 def checkpoint_path(config: TrainingConfig, context: dict[str, object]) -> Path:
     fold = context["fold"]
     label = "final" if context["role"] == "final" else str(fold)
-    return config.checkpoints_dir / f"fit_{context['role']}_{label}_{_fingerprint(context)}.pt"
+    return config.checkpoints_dir / f"fit_{context['role']}_{label}_{fingerprint(context)}.pt"
 
 
 def _file_logger(config: TrainingConfig, name: str) -> logging.Logger:
-    path = config.logs_dir / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    log = logging.getLogger(name)
-    log.setLevel(logging.INFO)
-    for handler in log.handlers:
-        if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename) == path:
-            return log
-    handler = logging.FileHandler(path)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    log.addHandler(handler)
-    return log
+    return file_logger(config.logs_dir / name, name)
 
 
 def make_model(num_classes: int, pretrained: bool = False, dropout: float = 0.2) -> nn.Module:
@@ -218,9 +194,9 @@ def model_artifact(
         "preprocessing": preprocessing.to_dict(),
         "classes": list(classes),
         "threshold": threshold,
-        "data_fingerprint": _file_sha256(config.data_dir / "train.csv"),
+        "data_fingerprint": sha256_file(config.data_dir / "train.csv"),
         "dataset_fingerprint": _dataset_fingerprint(config),
-        "config_fingerprint": _fingerprint(settings),
+        "config_fingerprint": fingerprint(settings),
         "environment": runtime_environment(device),
         "config": settings,
     }
@@ -569,26 +545,6 @@ def git_dirty() -> bool | None:
     return bool(result.stdout.strip()) if result.returncode == 0 else None
 
 
-def _atomic_json(path: Path, content: object) -> None:
-    text = json.dumps(content, indent=2, allow_nan=False) + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        newline="\n",
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-    ) as file:
-        temporary = Path(file.name)
-    try:
-        temporary.write_text(text, encoding="utf-8", newline="\n")
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def _publish_run(
     config: TrainingConfig,
     run_id: str,
@@ -611,7 +567,7 @@ def _publish_run(
             (staged / filename).write_text(
                 json.dumps(content, indent=2, allow_nan=False) + "\n", encoding="utf-8"
             )
-        _atomic_json(staged / "environment.json", artifact["environment"])
+        write_json_atomic(staged / "environment.json", artifact["environment"])
         filenames = (
             "model.pkl",
             "metrics.json",
@@ -622,14 +578,14 @@ def _publish_run(
         manifest = {
             "version": 1,
             "run_id": run_id,
-            "files": {filename: _file_sha256(staged / filename) for filename in filenames},
+            "files": {filename: sha256_file(staged / filename) for filename in filenames},
         }
-        _atomic_json(staged / "manifest.json", manifest)
+        write_json_atomic(staged / "manifest.json", manifest)
         if run_dir.exists():
             raise FileExistsError(f"Run directory already exists: {run_dir}")
         # shortcut: single-process publication; concurrent publishers need a no-replace rename.
         staged.replace(run_dir)
-    return run_dir, _file_sha256(run_dir / "manifest.json")
+    return run_dir, sha256_file(run_dir / "manifest.json")
 
 
 def _publish_compatibility(config: TrainingConfig, run_dir: Path) -> None:
@@ -686,7 +642,7 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
     model, history = fit_model(
         sorted(records.items()), classes, config, device, config.seed, preprocessing
     )
-    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    run_id = utc_run_id()
     threshold = statistics.median(thresholds)
     artifact = model_artifact(
         model,
@@ -729,7 +685,7 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
     }
     run_dir, manifest_sha256 = _publish_run(config, run_id, artifact, metrics, all_predictions)
     _publish_compatibility(config, run_dir)
-    _atomic_json(
+    write_json_atomic(
         config.artifacts_dir / "latest.json",
         {
             "run_id": run_id,

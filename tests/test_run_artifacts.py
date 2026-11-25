@@ -2,7 +2,6 @@ import hashlib
 import json
 import logging
 import subprocess
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -297,12 +296,7 @@ def test_failed_run_publication_preserves_latest_and_compatibility_outputs(
 def test_existing_run_is_never_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _stub_training(tmp_path, monkeypatch)
 
-    class FixedDateTime:
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2026, 11, 25, 12, 0, 0, tzinfo=UTC)
-
-    monkeypatch.setattr(model_building, "datetime", FixedDateTime)
+    monkeypatch.setattr(model_building, "utc_run_id", lambda: "20261125T120000000000Z")
     first = model_building.train(config)
     run_dir = config.artifacts_dir / "runs" / first["run_id"]
     sentinel = run_dir / "foreign.txt"

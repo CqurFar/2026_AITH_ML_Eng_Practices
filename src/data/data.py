@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import json
 import random
 import statistics
 from collections import Counter, defaultdict
@@ -10,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
+from utils import write_json_atomic
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,9 +123,7 @@ def audit_data(data_dir: str | Path, report_path: str | Path | None = None) -> d
         "issues": issues,
     }
     if report_path is not None:
-        output = Path(report_path)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        write_json_atomic(Path(report_path), report)
     return report
 
 

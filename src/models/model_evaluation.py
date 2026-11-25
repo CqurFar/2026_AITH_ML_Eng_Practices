@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TypedDict
 
 import torch
+from utils import read_json
 
 from src.config import training_config
 from src.data import Record
@@ -137,7 +138,7 @@ def main() -> None:
         "--predictions", type=Path, default=training_config().artifacts_dir / "oof.json"
     )
     args = parser.parse_args()
-    rows = json.loads(args.predictions.read_text(encoding="utf-8"))
+    rows = read_json(args.predictions)
     print(json.dumps(summarize(rows), indent=2))
 
 

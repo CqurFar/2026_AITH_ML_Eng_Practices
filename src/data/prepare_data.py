@@ -1,7 +1,7 @@
-import hashlib
 import json
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+
+from utils import fingerprint, write_json_atomic
 
 from src.config import AuditConfig
 from src.data import Split, audit_data, build_folds, load_records
@@ -15,14 +15,7 @@ def _persist_manifest(path: Path, manifest: dict[str, object]) -> None:
             return
     except (FileNotFoundError, UnicodeDecodeError):
         pass
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with NamedTemporaryFile(dir=path.parent, delete=False) as file:
-        temporary = Path(file.name)
-    try:
-        temporary.write_text(text, encoding="utf-8", newline="\n")
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    write_json_atomic(path, manifest)
 
 
 def prepare(data_dir: Path, processed_dir: Path, seed: int, n_folds: int) -> list[Split]:
@@ -34,13 +27,11 @@ def prepare(data_dir: Path, processed_dir: Path, seed: int, n_folds: int) -> lis
         "labels": sorted((record.image, record.identity) for record in records),
         "sha256": report["sha256"],
     }
-    fingerprint = hashlib.sha256(
-        json.dumps(fingerprint_data, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    data_fingerprint = fingerprint(fingerprint_data)
     splits, conflicts, unknown_duplicates = build_folds(records, seed, n_folds)
     manifest = {
         "version": 1,
-        "fingerprint": fingerprint,
+        "fingerprint": data_fingerprint,
         "seed": seed,
         "n_folds": n_folds,
         "conflicting_digests": {
