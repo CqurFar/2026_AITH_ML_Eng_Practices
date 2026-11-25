@@ -27,22 +27,22 @@ git clone https://github.com/CqurFar/2026_AITH_ML_Eng_Practices.git
 cd 2026_AITH_ML_Eng_Practices
 
 uv sync --locked                                  # зависимости
-uv run pre-commit run --all-files                 # проверка кода
+uv run --locked pre-commit run --all-files        # проверка кода
 
-uv run kaggle auth login                          # авторизация на kaggle
-uv run python -m src.data.get_data                # загрузка датасета
-uv run python -m src.data.prepare_data            # проверка данных
-uv run python -m src.visualization.integrity      # eda и viz
-uv run python -m src.preprocessing.bake           # предобработка и сохранение тензоров
+uv run --locked kaggle auth login                 # авторизация на kaggle
+uv run --locked python -m src.data.get_data       # загрузка датасета
+uv run --locked python -m src.data.prepare_data   # проверка данных
+uv run --locked python -m src.visualization.integrity   # eda и viz
+uv run --locked python -m src.preprocessing.bake  # предобработка и сохранение тензоров
 
-uv run python -m src.models.model_building        # обучение
-uv run python -m src.models.model_evaluation      # оценка
-uv run python -m src.models.model_prediction      # предсказания 
+uv run --locked python -m src.models.model_building   # обучение
+uv run --locked python -m src.models.model_evaluation # оценка
+uv run --locked python -m src.models.model_prediction # предсказания
 ```
 
 ## Есть шимы, если важно, чтобы команды были как в ТЗ
 
 ```bash
-uv run python -m src.get_data
-uv run python -m src.train
+uv run --locked python -m src.get_data
+uv run --locked python -m src.train
 ```
