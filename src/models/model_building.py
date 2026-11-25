@@ -691,7 +691,7 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
         "train_csv_sha256": artifact["data_fingerprint"],
         "architecture": "mobilenet_v3_small",
         "protocol": (
-            "custom open-set assignment: identity-grouped folds and calibration, "
+            "custom open-set assignment: digest-grouped CV folds, identity-grouped calibration, "
             "digest-grouped new_whale"
         ),
         "config": settings,

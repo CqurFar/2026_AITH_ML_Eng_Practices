@@ -154,7 +154,7 @@ def test_train_metrics_report_coverage_and_custom_open_set_protocol(
     assert metrics["excluded_samples"] == 3
     assert metrics["singleton_train_only"] == 2
     assert metrics["protocol"] == (
-        "custom open-set assignment: identity-grouped folds and calibration, "
+        "custom open-set assignment: digest-grouped CV folds, identity-grouped calibration, "
         "digest-grouped new_whale"
     )
 
