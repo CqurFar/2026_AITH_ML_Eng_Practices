@@ -1,0 +1,53 @@
+import pytest
+import torch
+from src.models.model_evaluation import map_at_5, ranked_predictions
+
+
+@pytest.mark.parametrize("position", [1, 2, 3, 4, 5])
+def test_map_at_5_scores_each_of_the_first_five_positions(position: int) -> None:
+    candidates = [f"label_{index}" for index in range(6)]
+
+    assert map_at_5([candidates[position - 1]], [candidates]) == pytest.approx(1 / position)
+
+
+def test_map_at_5_ignores_targets_outside_top_five() -> None:
+    assert map_at_5(["label_5"], [[f"label_{index}" for index in range(6)]]) == 0.0
+
+
+def test_map_at_5_scores_missing_target_as_zero() -> None:
+    assert map_at_5(["missing"], [["label_0", "label_1"]]) == 0.0
+
+
+def test_map_at_5_accepts_short_prediction_lists() -> None:
+    assert map_at_5(["label_1"], [["label_0", "label_1"]]) == 0.5
+
+
+def test_map_at_5_uses_first_occurrence_of_duplicate_candidates() -> None:
+    assert map_at_5(["target"], [["wrong", "wrong", "target", "target"]]) == pytest.approx(1 / 3)
+
+
+def test_map_at_5_treats_new_whale_as_an_ordinary_candidate() -> None:
+    assert map_at_5(["new_whale"], [["label_0", "new_whale"]]) == 0.5
+
+
+def test_map_at_5_averages_per_image_reciprocal_ranks() -> None:
+    targets = ["first", "third", "missing"]
+    predictions = [
+        ["first", "other"],
+        ["other", "other_2", "third"],
+        ["other", "other_2", "other_3", "other_4", "other_5"],
+    ]
+
+    assert map_at_5(targets, predictions) == pytest.approx((1 + 1 / 3) / 3)
+
+
+def test_ranked_predictions_reserve_one_of_five_slots_for_new_whale() -> None:
+    classes = [f"label_{index}" for index in range(6)]
+    probabilities = torch.tensor([[0.40, 0.25, 0.15, 0.10, 0.06, 0.04]])
+
+    assert ranked_predictions(probabilities, classes, threshold=0.5) == [
+        ["new_whale", "label_0", "label_1", "label_2", "label_3"]
+    ]
+    assert ranked_predictions(probabilities, classes, threshold=0.0) == [
+        ["label_0", "label_1", "label_2", "label_3", "new_whale"]
+    ]
