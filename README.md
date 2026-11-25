@@ -25,7 +25,7 @@
 - Commit: `335fc0fe6cc5fce53b8f8400d8137fe11f0051c5`
 - Run ID: `20261125T213244777337Z`
 - OOF MAP@5: `0.5949818521363274`
-- Артефакты: `artifacts/hw1-final/artifacts/`
+- Артефакты: `artifacts/hw1-baseline/`
 - Отчёт: [reports/hw-1.md](reports/hw-1.md)
 
 ## Установка и запуск
