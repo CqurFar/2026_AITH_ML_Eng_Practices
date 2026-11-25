@@ -153,6 +153,7 @@ def fit_model(
     config: TrainingConfig,
     device: torch.device,
     seed: int,
+    preprocessing: PreprocessingConfig,
 ) -> tuple[nn.Module, list[dict[str, float]]]:
     class_index = {label: index for index, label in enumerate(classes)}
     if not rows or not classes or len(class_index) != len(classes):
@@ -179,7 +180,7 @@ def fit_model(
     records = [
         Record(name, identity, config.data_dir / "train" / name, "") for name, identity in rows
     ]
-    dataset = WhaleDataset(records, PreprocessingConfig(), augment=True, train_dir=config.train_dir)
+    dataset = WhaleDataset(records, preprocessing, augment=True, train_dir=config.train_dir)
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size,
@@ -277,12 +278,13 @@ def probabilities(
     directory: Path,
     config: TrainingConfig,
     device: torch.device,
+    preprocessing: PreprocessingConfig,
 ) -> tuple[torch.Tensor, list[str]]:
     if not rows:
         raise ValueError("Inference requires at least one row")
     use_cuda = device.type == "cuda"
     records = [Record(name, identity, directory / name, "") for name, identity in rows]
-    dataset = WhaleDataset(records, PreprocessingConfig(), train_dir=config.train_dir)
+    dataset = WhaleDataset(records, preprocessing, train_dir=config.train_dir)
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size,
@@ -305,13 +307,17 @@ def probabilities(
 
 
 def evaluate_fold(
-    split: Split, fold: int, config: TrainingConfig, device: torch.device
+    split: Split,
+    fold: int,
+    config: TrainingConfig,
+    device: torch.device,
+    preprocessing: PreprocessingConfig,
 ) -> tuple[list[Prediction], dict[str, object], float]:
     train_rows = [(record.image, record.identity) for record in split.train]
     classes = sorted({label for _, label in train_rows})
     seed = config.seed + fold
     calibration, evaluation = calibration_split(split.known, split.unseen, seed, 0.4)
-    model, history = fit_model(train_rows, classes, config, device, seed)
+    model, history = fit_model(train_rows, classes, config, device, seed, preprocessing)
     known_names = {record.image for record in split.known}
 
     def target(record: Record) -> str:
@@ -323,6 +329,7 @@ def evaluate_fold(
         config.data_dir / "train",
         config,
         device,
+        preprocessing,
     )
     cut = len(calibration)
     threshold = select_threshold(scores[:cut], targets[:cut])
@@ -361,6 +368,7 @@ def code_version() -> str | None:
 
 def train(config: TrainingConfig | None = None) -> dict[str, object]:
     config = config or training_config()
+    preprocessing = PreprocessingConfig()
     start = perf_counter()
     device = torch.device(CUDAConfig().device)
     print(f"Device: {device}", flush=True)
@@ -379,7 +387,7 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
             len(split.unseen),
             len(split.excluded),
         )
-        predictions, results, threshold = evaluate_fold(split, fold, config, device)
+        predictions, results, threshold = evaluate_fold(split, fold, config, device, preprocessing)
         log.info("fold=%d map_at_5=%.4f threshold=%.4f", fold, results["map_at_5"], threshold)
         all_predictions.extend(predictions)
         fold_metrics.append(results)
@@ -394,14 +402,16 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
     }
     classes = sorted(set(records.values()))
     print(f"Final refit: {len(records)} images, {len(classes)} classes", flush=True)
-    model, history = fit_model(sorted(records.items()), classes, config, device, config.seed)
+    model, history = fit_model(
+        sorted(records.items()), classes, config, device, config.seed, preprocessing
+    )
     run_id = datetime.now(UTC).isoformat()
     threshold = statistics.median(thresholds)
     artifact = model_artifact(
         model,
         classes=classes,
         threshold=threshold,
-        preprocessing=PreprocessingConfig(),
+        preprocessing=preprocessing,
         config=config,
         device=device,
         run_id=run_id,

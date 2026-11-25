@@ -12,6 +12,7 @@ from src.preprocessing.transforms import (
     prepared_file,
     preprocess_image,
     to_model_tensor,
+    validate_preprocessing_manifest,
 )
 
 
@@ -27,6 +28,8 @@ class WhaleDataset(Dataset):
         self.config = config
         self.augmentation = train_augment() if augment else None
         self.train_dir = train_dir
+        if train_dir is not None:
+            validate_preprocessing_manifest(train_dir, config)
 
     def __len__(self) -> int:
         return len(self.records)

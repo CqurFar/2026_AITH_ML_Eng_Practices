@@ -1,10 +1,15 @@
 import hashlib
 import json
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+import src.config as config_module
 import torch
 from PIL import Image
 from src.config import PreprocessingConfig, training_config
+from src.data import Record, Split
 from src.models import model_building
 from src.preprocessing import preprocess_image
 from torch import nn
@@ -75,3 +80,88 @@ def test_model_artifact_round_trip_preserves_preprocessing_and_class_order(tmp_p
         preprocess_image(image, restored_preprocessing),
         preprocess_image(image, preprocessing),
     )
+
+
+def test_train_reuses_one_preprocessing_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "train.csv").write_text("Image,Id\ntrain.png,whale_a\n", encoding="utf-8")
+    config = training_config(data_dir=raw_dir, artifacts_dir=tmp_path / "artifacts")
+    record = Record("train.png", "whale_a", raw_dir / "train" / "train.png", "digest")
+    split = Split(train=[record], known=[], unseen=[], excluded=[])
+    prediction = {
+        "image": record.image,
+        "cohort": "known",
+        "target": record.identity,
+        "candidates": [record.identity],
+    }
+    seen = {}
+    config_module.load_config.cache_clear()
+    expected_preprocessing = PreprocessingConfig().to_dict()
+
+    def fake_evaluate_fold(_split, _fold, _config, _device, preprocessing):
+        seen["fold"] = preprocessing
+        config_module.load_config()["preprocessing"]["target_height"] = 1
+        return [prediction], {"map_at_5": 1.0}, 0.5
+
+    def fake_fit_model(_rows, _classes, _config, _device, _seed, preprocessing):
+        seen["fit"] = preprocessing
+        return nn.Linear(1, 1), []
+
+    real_model_artifact = model_building.model_artifact
+
+    def capturing_model_artifact(*args, **kwargs):
+        seen["artifact"] = kwargs["preprocessing"]
+        return real_model_artifact(*args, **kwargs)
+
+    monkeypatch.setattr(model_building, "prepare", lambda *_args: [split])
+    monkeypatch.setattr(model_building, "CUDAConfig", lambda: SimpleNamespace(device="cpu"))
+    monkeypatch.setattr(model_building, "_file_logger", lambda *_args: logging.getLogger(__name__))
+    monkeypatch.setattr(model_building, "evaluate_fold", fake_evaluate_fold)
+    monkeypatch.setattr(model_building, "fit_model", fake_fit_model)
+    monkeypatch.setattr(model_building, "model_artifact", capturing_model_artifact)
+    try:
+        model_building.train(config)
+    finally:
+        config_module.load_config.cache_clear()
+
+    assert seen["fold"] is seen["fit"] is seen["artifact"]
+    artifact = torch.load(config.artifacts_dir / "model.pkl", weights_only=True)
+    assert artifact["preprocessing"] == expected_preprocessing
+
+
+def test_evaluate_fold_shares_preprocessing_with_fit_and_oof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = training_config(data_dir=tmp_path / "raw", artifacts_dir=tmp_path / "artifacts")
+    train_record = Record("train.png", "whale_a", tmp_path / "train.png", "train-digest")
+    known_record = Record("known.png", "whale_a", tmp_path / "known.png", "known-digest")
+    preprocessing = PreprocessingConfig()
+    seen = []
+
+    def fake_fit_model(_rows, _classes, _config, _device, _seed, preprocessing):
+        seen.append(preprocessing)
+        return nn.Linear(1, 1), []
+
+    def fake_probabilities(_model, _rows, _directory, _config, _device, preprocessing):
+        seen.append(preprocessing)
+        return torch.tensor([[0.9]]), [known_record.identity]
+
+    monkeypatch.setattr(model_building, "calibration_split", lambda *_args: ([], [known_record]))
+    monkeypatch.setattr(model_building, "fit_model", fake_fit_model)
+    monkeypatch.setattr(model_building, "probabilities", fake_probabilities)
+    monkeypatch.setattr(model_building, "select_threshold", lambda *_args: 0.5)
+
+    model_building.evaluate_fold(
+        Split(train=[train_record], known=[known_record], unseen=[], excluded=[]),
+        1,
+        config,
+        torch.device("cpu"),
+        preprocessing,
+    )
+
+    assert len(seen) == 2
+    assert seen[0] is preprocessing
+    assert seen[1] is preprocessing

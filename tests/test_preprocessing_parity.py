@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 
 import numpy as np
@@ -7,7 +8,14 @@ from PIL import Image
 from src.config import PreprocessingConfig, training_config
 from src.data import Record
 from src.models import model_prediction
-from src.preprocessing import WhaleDataset, bake, load_image, preprocess_image
+from src.preprocessing import (
+    WhaleDataset,
+    bake,
+    load_image,
+    prepared_file,
+    preprocess_image,
+    save_prepared,
+)
 
 PREPROCESSING = {
     "target_height": 256,
@@ -76,3 +84,54 @@ def test_direct_baked_and_prediction_tensors_match(
         assert tensor.shape == (3, 256, 512)
         assert tensor.dtype == torch.float32
         assert torch.equal(tensor, direct)
+
+
+def _baked_record(tmp_path):
+    image_path = tmp_path / "whale.png"
+    Image.new("RGB", (140, 90), color=(120, 60, 30)).save(image_path)
+    return PreprocessingConfig(), Record(image_path.name, "whale_a", image_path, "digest")
+
+
+def test_bake_records_preprocessing_identity(tmp_path) -> None:
+    preprocessing, record = _baked_record(tmp_path)
+    prepared_dir = tmp_path / "prepared"
+
+    assert bake([record], preprocessing, train_dir=prepared_dir) == 1
+
+    manifest = json.loads((prepared_dir / "preprocessing.json").read_text(encoding="utf-8"))
+    assert manifest == PREPROCESSING
+
+
+@pytest.mark.parametrize("with_manifest", [False, True])
+def test_bake_rejects_stale_prepared_data(tmp_path, with_manifest: bool) -> None:
+    preprocessing, record = _baked_record(tmp_path)
+    prepared_dir = tmp_path / "prepared"
+    prepared_file_path = prepared_file(prepared_dir, record.image)
+    if with_manifest:
+        assert bake([record], preprocessing, train_dir=prepared_dir) == 1
+    else:
+        save_prepared(torch.zeros((3, 256, 512), dtype=torch.uint8), prepared_file_path)
+    original = prepared_file_path.read_bytes()
+    changed = PreprocessingConfig.from_dict({**PREPROCESSING, "target_width": 256})
+
+    with pytest.raises(ValueError, match="(?i)preprocessing"):
+        bake([record], changed, train_dir=prepared_dir)
+
+    assert prepared_file_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("with_manifest", [False, True])
+def test_dataset_rejects_unverified_prepared_data(tmp_path, with_manifest: bool) -> None:
+    preprocessing, record = _baked_record(tmp_path)
+    prepared_dir = tmp_path / "prepared"
+    if with_manifest:
+        assert bake([record], preprocessing, train_dir=prepared_dir) == 1
+    else:
+        save_prepared(
+            torch.zeros((3, 256, 512), dtype=torch.uint8),
+            prepared_file(prepared_dir, record.image),
+        )
+    changed = PreprocessingConfig.from_dict({**PREPROCESSING, "target_width": 256})
+
+    with pytest.raises(ValueError, match="(?i)preprocessing"):
+        WhaleDataset([record], changed, train_dir=prepared_dir)

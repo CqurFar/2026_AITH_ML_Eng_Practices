@@ -6,21 +6,33 @@ from tqdm import tqdm
 from src.config import PreprocessingConfig
 from src.data import Record
 from src.preprocessing.transforms import (
+    PREPROCESSING_MANIFEST,
     load_image,
     prepared_file,
     prepared_tensor,
     save_prepared,
+    save_preprocessing_manifest,
+    validate_preprocessing_manifest,
 )
 from src.steps import step
 
 
 def bake(records: list[Record], config: PreprocessingConfig, train_dir: Path | None = None) -> int:
     directory = Path(train_dir) if train_dir is not None else config.train_dir
+    directory.mkdir(parents=True, exist_ok=True)
+    manifest = directory / PREPROCESSING_MANIFEST
+    if manifest.exists():
+        validate_preprocessing_manifest(directory, config)
+    elif any(directory.glob("*.npy")):
+        raise ValueError(
+            f"Missing preprocessing metadata in {directory}; clear prepared data and re-bake"
+        )
     count = 0
     for record in tqdm(records, desc="bake", unit="img"):
         tensor = prepared_tensor(load_image(record.path), config)
         save_prepared(tensor, prepared_file(directory, record.image))
         count += 1
+    save_preprocessing_manifest(directory, config)
     return count
 
 

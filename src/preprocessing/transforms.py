@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,7 @@ INTERPOLATIONS = {
     "bicubic": InterpolationMode.BICUBIC,
     "nearest": InterpolationMode.NEAREST,
 }
+PREPROCESSING_MANIFEST = "preprocessing.json"
 
 
 def load_image(path: Path) -> Image.Image:
@@ -80,3 +82,28 @@ def save_prepared(tensor: torch.Tensor, path: Path) -> None:
 
 def load_prepared(path: Path) -> torch.Tensor:
     return torch.from_numpy(np.load(path))
+
+
+def save_preprocessing_manifest(directory: Path, config: PreprocessingConfig) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / PREPROCESSING_MANIFEST).write_text(
+        json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def validate_preprocessing_manifest(directory: Path, config: PreprocessingConfig) -> None:
+    path = directory / PREPROCESSING_MANIFEST
+    if not path.exists():
+        raise ValueError(
+            f"Missing preprocessing metadata in {directory}; clear prepared data and re-bake"
+        )
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"Invalid preprocessing metadata in {directory}; clear prepared data and re-bake"
+        ) from exc
+    if stored != config.to_dict():
+        raise ValueError(
+            f"Preprocessing metadata in {directory} does not match; clear prepared data and re-bake"
+        )
