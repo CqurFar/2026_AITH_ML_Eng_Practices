@@ -104,7 +104,7 @@ def test_train_reuses_one_preprocessing_instance(
     def fake_evaluate_fold(_split, _fold, _config, _device, preprocessing):
         seen["fold"] = preprocessing
         config_module.load_config()["preprocessing"]["target_height"] = 1
-        return [prediction], {"map_at_5": 1.0}, 0.5
+        return [prediction], {"map_at_5": 1.0, "calibration_samples": 0}, 0.5
 
     def fake_fit_model(_rows, _classes, _config, _device, _seed, preprocessing, **_kwargs):
         seen["fit"] = preprocessing

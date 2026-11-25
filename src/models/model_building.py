@@ -6,6 +6,7 @@ import platform
 import shutil
 import statistics
 import subprocess
+from collections import defaultdict
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from math import isfinite
@@ -37,6 +38,7 @@ from src.preprocessing import WhaleDataset
 from src.steps import step
 
 logger = logging.getLogger(__name__)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class CheckpointError(RuntimeError):
@@ -173,6 +175,19 @@ def make_model(num_classes: int, pretrained: bool = False, dropout: float = 0.2)
     return model
 
 
+def runtime_environment(device: torch.device) -> dict[str, object]:
+    return {
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "torch": str(torch.__version__),
+        "torchvision": str(torchvision_version),
+        "cuda": torch.version.cuda,
+        "device": str(device),
+        "git_commit": code_version(),
+        "git_dirty": git_dirty(),
+    }
+
+
 def model_artifact(
     model: nn.Module,
     *,
@@ -192,15 +207,7 @@ def model_artifact(
         "threshold": threshold,
         "data_fingerprint": _file_sha256(config.data_dir / "train.csv"),
         "config_fingerprint": _fingerprint(settings),
-        "environment": {
-            "platform": platform.platform(),
-            "python": platform.python_version(),
-            "torch": str(torch.__version__),
-            "torchvision": str(torchvision_version),
-            "cuda": torch.version.cuda,
-            "device": str(device),
-            "git_commit": code_version(),
-        },
+        "environment": runtime_environment(device),
         "config": settings,
     }
 
@@ -523,11 +530,29 @@ def evaluate_fold(
 def code_version() -> str | None:
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+            ["git", "rev-parse", "HEAD"],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
         )
     except FileNotFoundError:
         return None
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def git_dirty() -> bool | None:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    return bool(result.stdout.strip()) if result.returncode == 0 else None
 
 
 def _atomic_json(path: Path, content: object) -> None:
@@ -622,6 +647,11 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
         thresholds.append(threshold)
         print(f"Fold {fold} MAP@5: {results['map_at_5']:.4f}", flush=True)
 
+    identity_digests: dict[str, set[str]] = defaultdict(set)
+    for split in splits:
+        for record in split.train + split.known + split.unseen + split.excluded:
+            if record.identity != UNKNOWN:
+                identity_digests[record.identity].add(record.digest)
     records = {
         record.image: record.identity
         for split in splits
@@ -645,14 +675,25 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
         run_id=run_id,
     )
     settings = cast("dict[str, object]", artifact["config"])
+    environment = cast("dict[str, object]", artifact["environment"])
+    excluded_images = {record.image for split in splits for record in split.excluded}
     metrics: dict[str, object] = {
         **summarize(all_predictions),
         "run_id": run_id,
-        "git_commit": code_version(),
+        "evaluated_samples": len(all_predictions),
+        "calibration_samples": sum(fold["calibration_samples"] for fold in fold_metrics),
+        "excluded_samples": len(excluded_images),
+        "singleton_train_only": sum(len(digests) == 1 for digests in identity_digests.values()),
+        "git_commit": environment["git_commit"],
+        "git_dirty": environment["git_dirty"],
+        "environment": environment,
         "dataset": COMPETITION,
         "train_csv_sha256": artifact["data_fingerprint"],
         "architecture": "mobilenet_v3_small",
-        "protocol": "stratified grouped CV, held-out threshold calibration",
+        "protocol": (
+            "custom open-set assignment: identity-grouped folds and calibration, "
+            "digest-grouped new_whale"
+        ),
         "config": settings,
         "device": str(device),
         "runtime_seconds": round(perf_counter() - start, 2),

@@ -28,12 +28,10 @@ def calibration_split(
         raise ValueError("Calibration fraction must be between zero and one")
     rng = random.Random(seed)
     calibration, evaluation = [], []
-    for records, whole_identity in ((known, False), (unseen, True)):
+    for records in (known, unseen):
         groups = defaultdict(list)
         for record in records:
-            key = (
-                record.identity if whole_identity and record.identity != UNKNOWN else record.digest
-            )
+            key = record.digest if record.identity == UNKNOWN else record.identity
             groups[key].append(record)
         keys = sorted(groups)
         if len(keys) < 2:

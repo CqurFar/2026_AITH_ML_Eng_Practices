@@ -1,6 +1,9 @@
+from pathlib import Path
+
 import pytest
 import torch
-from src.models.model_evaluation import map_at_5, ranked_predictions
+from src.data import Record
+from src.models.model_evaluation import calibration_split, map_at_5, ranked_predictions
 
 
 @pytest.mark.parametrize("position", [1, 2, 3, 4, 5])
@@ -39,6 +42,64 @@ def test_map_at_5_averages_per_image_reciprocal_ranks() -> None:
     ]
 
     assert map_at_5(targets, predictions) == pytest.approx((1 + 1 / 3) / 3)
+
+
+def test_calibration_keeps_known_identity_groups_together(tmp_path: Path) -> None:
+    records = [
+        Record(f"{identity}_{index}.png", identity, tmp_path / f"{identity}_{index}.png", digest)
+        for identity in ("whale_a", "whale_b", "whale_c")
+        for index, digest in enumerate((f"{identity}-1", f"{identity}-2"))
+    ]
+    unseen = [
+        Record(f"{identity}.png", identity, tmp_path / f"{identity}.png", f"{identity}-digest")
+        for identity in ("unseen_a", "unseen_b")
+    ]
+
+    calibration, evaluation = calibration_split(records, unseen, seed=0, fraction=0.5)
+
+    calibration_identities = {record.identity for record in calibration} & {
+        record.identity for record in records
+    }
+    evaluation_identities = {record.identity for record in evaluation} & {
+        record.identity for record in records
+    }
+    assert calibration_identities.isdisjoint(evaluation_identities)
+    assert calibration_identities | evaluation_identities == {"whale_a", "whale_b", "whale_c"}
+
+
+def test_calibration_groups_unseen_by_identity_and_new_whale_by_digest(tmp_path: Path) -> None:
+    known = [
+        Record(f"{identity}.png", identity, tmp_path / f"{identity}.png", f"{identity}-digest")
+        for identity in ("known_a", "known_b")
+    ]
+    unseen = [
+        Record(
+            f"{identity}_{index}.png",
+            identity,
+            tmp_path / f"{identity}_{index}.png",
+            f"{identity}-{index}",
+        )
+        for identity in ("unseen_a", "unseen_b")
+        for index in (1, 2)
+    ] + [
+        Record(f"unknown_{index}.png", "new_whale", tmp_path / f"unknown_{index}.png", digest)
+        for index, digest in enumerate(("unknown-1", "unknown-2", "unknown-3", "unknown-4"), 1)
+    ]
+
+    calibration, evaluation = calibration_split(known, unseen, seed=0, fraction=0.5)
+
+    for identity in ("unseen_a", "unseen_b"):
+        sides = [
+            {record.image for record in cohort if record.identity == identity}
+            for cohort in (calibration, evaluation)
+        ]
+        assert sorted(sides, key=len) == [set(), {f"{identity}_1.png", f"{identity}_2.png"}]
+    unknown_sides = [
+        {record.image for record in cohort if record.identity == "new_whale"}
+        for cohort in (calibration, evaluation)
+    ]
+    assert all(unknown_sides)
+    assert set.union(*unknown_sides) == {f"unknown_{index}.png" for index in range(1, 5)}
 
 
 def test_ranked_predictions_reserve_one_of_five_slots_for_new_whale() -> None:

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,7 +33,7 @@ def _stub_training(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         model_building,
         "evaluate_fold",
-        lambda *_args: ([prediction], {"map_at_5": 1.0}, 0.5),
+        lambda *_args: ([prediction], {"map_at_5": 1.0, "calibration_samples": 0}, 0.5),
     )
     monkeypatch.setattr(
         model_building, "fit_model", lambda *_args, **_kwargs: (nn.Linear(1, 1), [])
@@ -97,6 +98,97 @@ def test_train_publishes_hashed_run_and_updates_latest_last(
     assert latest["manifest_sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
     for filename in ("model.pkl", "metrics.json", "oof.json"):
         assert (config.artifacts_dir / filename).read_bytes() == (run_dir / filename).read_bytes()
+
+
+def test_train_metrics_report_coverage_and_custom_open_set_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _stub_training(tmp_path, monkeypatch)
+
+    def record(image: str, identity: str, digest: str) -> Record:
+        return Record(image, identity, config.data_dir / "train" / image, digest)
+
+    singleton_train = [
+        record("singleton_a_1.png", "singleton_a", "singleton-a"),
+        record("singleton_a_2.png", "singleton_a", "singleton-a"),
+        record("singleton_b.png", "singleton_b", "singleton-b"),
+        record("whale_train.png", "whale_a", "whale-train"),
+    ]
+    known = [
+        record("known_1.png", "whale_a", "known-1"),
+        record("known_2.png", "whale_a", "known-2"),
+    ]
+    shared_excluded = record("shared_excluded.png", "conflict", "conflict-shared")
+    splits = [
+        Split(
+            train=singleton_train,
+            known=[known[0]],
+            unseen=[],
+            excluded=[shared_excluded, record("excluded_a.png", "conflict", "conflict-a")],
+        ),
+        Split(
+            train=singleton_train,
+            known=[known[1]],
+            unseen=[],
+            excluded=[shared_excluded, record("excluded_b.png", "conflict", "conflict-b")],
+        ),
+    ]
+    calibration_sizes = {1: 2, 2: 3}
+    monkeypatch.setattr(model_building, "prepare", lambda *_args: splits)
+
+    def fake_evaluate_fold(_split, fold, *_args):
+        prediction = {
+            "image": known[fold - 1].image,
+            "cohort": "known",
+            "target": "whale_a",
+            "candidates": ["whale_a"],
+        }
+        return [prediction], {"map_at_5": 1.0, "calibration_samples": calibration_sizes[fold]}, 0.5
+
+    monkeypatch.setattr(model_building, "evaluate_fold", fake_evaluate_fold)
+
+    metrics = model_building.train(config)
+
+    assert metrics["evaluated_samples"] == 2
+    assert metrics["calibration_samples"] == 5
+    assert metrics["excluded_samples"] == 3
+    assert metrics["singleton_train_only"] == 2
+    assert metrics["protocol"] == (
+        "custom open-set assignment: identity-grouped folds and calibration, "
+        "digest-grouped new_whale"
+    )
+
+
+def test_train_metrics_record_environment_and_git_dirty_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _stub_training(tmp_path, monkeypatch)
+
+    def fake_git(command, **_kwargs):
+        output = {
+            ("git", "rev-parse", "HEAD"): "abc123\n",
+            ("git", "status", "--porcelain"): " M src/models/model_building.py\n",
+        }[tuple(command)]
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(model_building.subprocess, "run", fake_git)
+
+    metrics = model_building.train(config)
+
+    assert metrics["git_commit"] == "abc123"
+    assert metrics["git_dirty"] is True
+    assert metrics["environment"]["git_commit"] == "abc123"
+    assert metrics["environment"]["git_dirty"] is True
+    assert {
+        "platform",
+        "python",
+        "torch",
+        "torchvision",
+        "cuda",
+        "device",
+        "git_commit",
+        "git_dirty",
+    } <= metrics["environment"].keys()
 
 
 def test_train_keeps_previous_runs_immutable(
