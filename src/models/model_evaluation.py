@@ -21,25 +21,45 @@ class Prediction(TypedDict):
     candidates: list[str]
 
 
+def _calibration_cohort(
+    records: list[Record],
+    *,
+    cohort: str,
+    rng: random.Random,
+    fraction: float,
+) -> tuple[list[Record], list[Record]]:
+    groups: dict[str, list[Record]] = defaultdict(list)
+    for record in records:
+        key = record.digest if cohort == "new_whale" else record.identity
+        groups[key].append(record)
+    keys = sorted(groups)
+    if len(keys) < 2:
+        raise ValueError(f"Calibration cohort {cohort} needs at least two independent groups")
+    rng.shuffle(keys)
+    cut = min(len(keys) - 1, max(1, round(len(keys) * fraction)))
+    calibration = [record for key in keys[:cut] for record in groups[key]]
+    evaluation = [record for key in keys[cut:] for record in groups[key]]
+    return calibration, evaluation
+
+
 def calibration_split(
     known: list[Record], unseen: list[Record], seed: int, fraction: float
 ) -> tuple[list[Record], list[Record]]:
     if not 0 < fraction < 1:
         raise ValueError("Calibration fraction must be between zero and one")
-    rng = random.Random(seed)
-    calibration, evaluation = [], []
-    for records in (known, unseen):
-        groups = defaultdict(list)
-        for record in records:
-            key = record.digest if record.identity == UNKNOWN else record.identity
-            groups[key].append(record)
-        keys = sorted(groups)
-        if len(keys) < 2:
-            raise ValueError("Each validation cohort needs two independent calibration groups")
-        rng.shuffle(keys)
-        cut = min(len(keys) - 1, max(1, round(len(keys) * fraction)))
-        calibration.extend(record for key in keys[:cut] for record in groups[key])
-        evaluation.extend(record for key in keys[cut:] for record in groups[key])
+    cohorts = (
+        ("known", known),
+        ("unseen_identity", [record for record in unseen if record.identity != UNKNOWN]),
+        ("new_whale", [record for record in unseen if record.identity == UNKNOWN]),
+    )
+    calibration: list[Record] = []
+    evaluation: list[Record] = []
+    for index, (cohort, records) in enumerate(cohorts):
+        cohort_calibration, cohort_evaluation = _calibration_cohort(
+            records, cohort=cohort, rng=random.Random(seed + index), fraction=fraction
+        )
+        calibration.extend(cohort_calibration)
+        evaluation.extend(cohort_evaluation)
     return calibration, evaluation
 
 

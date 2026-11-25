@@ -53,6 +53,14 @@ def test_calibration_keeps_known_identity_groups_together(tmp_path: Path) -> Non
     unseen = [
         Record(f"{identity}.png", identity, tmp_path / f"{identity}.png", f"{identity}-digest")
         for identity in ("unseen_a", "unseen_b")
+    ] + [
+        Record(
+            f"unknown_{index}.png",
+            "new_whale",
+            tmp_path / f"unknown_{index}.png",
+            f"unknown-{index}",
+        )
+        for index in range(2)
     ]
 
     calibration, evaluation = calibration_split(records, unseen, seed=0, fraction=0.5)
@@ -100,6 +108,143 @@ def test_calibration_groups_unseen_by_identity_and_new_whale_by_digest(tmp_path:
     ]
     assert all(unknown_sides)
     assert set.union(*unknown_sides) == {f"unknown_{index}.png" for index in range(1, 5)}
+
+
+def test_calibration_reserves_groups_for_each_unknown_cohort(tmp_path: Path) -> None:
+    known = [
+        Record(
+            f"known_{index}.png",
+            f"known_{index}",
+            tmp_path / f"known_{index}.png",
+            f"known-{index}",
+        )
+        for index in range(2)
+    ]
+    unseen = [
+        Record(
+            f"unseen_{index}.png",
+            f"unseen_{index}",
+            tmp_path / f"unseen_{index}.png",
+            f"unseen-{index}",
+        )
+        for index in range(20)
+    ]
+    unknown = [
+        Record(
+            f"unknown_{index}.png",
+            "new_whale",
+            tmp_path / f"unknown_{index}.png",
+            f"unknown-{index}",
+        )
+        for index in range(2)
+    ]
+
+    calibration, evaluation = calibration_split(known, [*unseen, *unknown], seed=5, fraction=0.4)
+
+    calibration_unknown = {record.image for record in calibration if record.identity == "new_whale"}
+    evaluation_unknown = {record.image for record in evaluation if record.identity == "new_whale"}
+    assert calibration_unknown
+    assert evaluation_unknown
+    assert calibration_unknown | evaluation_unknown == {record.image for record in unknown}
+    for cohort in (calibration, evaluation):
+        assert any(record.identity.startswith("known_") for record in cohort)
+        assert any(record.identity.startswith("unseen_") for record in cohort)
+
+
+@pytest.mark.parametrize("cohort", ["known", "unseen_identity", "new_whale"])
+def test_calibration_requires_two_groups_in_each_cohort(tmp_path: Path, cohort: str) -> None:
+    known = [
+        Record(
+            f"known_{index}.png",
+            f"known_{index}",
+            tmp_path / f"known_{index}.png",
+            f"known-{index}",
+        )
+        for index in range(2)
+    ]
+    unseen = [
+        Record(
+            f"unseen_{index}.png",
+            f"unseen_{index}",
+            tmp_path / f"unseen_{index}.png",
+            f"unseen-{index}",
+        )
+        for index in range(2)
+    ]
+    unknown = [
+        Record(
+            f"unknown_{index}.png",
+            "new_whale",
+            tmp_path / f"unknown_{index}.png",
+            f"unknown-{index}",
+        )
+        for index in range(2)
+    ]
+    if cohort == "known":
+        known = known[:1]
+    elif cohort == "unseen_identity":
+        unseen = unseen[:1]
+    else:
+        unknown = unknown[:1]
+
+    with pytest.raises(ValueError, match=cohort):
+        calibration_split(known, [*unseen, *unknown], seed=5, fraction=0.4)
+
+
+def test_unknown_calibration_is_independent_of_known_cohort_size(tmp_path: Path) -> None:
+    known = [
+        Record(
+            f"known_{index}.png",
+            f"known_{index}",
+            tmp_path / f"known_{index}.png",
+            f"known-{index}",
+        )
+        for index in range(2)
+    ]
+    unseen = [
+        Record(
+            f"unseen_{index}.png",
+            f"unseen_{index}",
+            tmp_path / f"unseen_{index}.png",
+            f"unseen-{index}",
+        )
+        for index in range(20)
+    ]
+    unknown = [
+        Record(
+            f"unknown_{index}.png",
+            "new_whale",
+            tmp_path / f"unknown_{index}.png",
+            f"unknown-{index}",
+        )
+        for index in range(2)
+    ]
+    extra_known = [
+        Record(
+            f"known_{index}.png",
+            f"known_{index}",
+            tmp_path / f"known_{index}.png",
+            f"known-{index}",
+        )
+        for index in range(2, 4)
+    ]
+
+    first_calibration, first_evaluation = calibration_split(known, [*unseen, *unknown], 5, 0.4)
+    second_calibration, second_evaluation = calibration_split(
+        [*known, *extra_known], [*unseen, *unknown], 5, 0.4
+    )
+
+    def unknown_sides(
+        calibration: list[Record], evaluation: list[Record]
+    ) -> tuple[set[str], set[str]]:
+        return (
+            {record.image for record in calibration if not record.identity.startswith("known_")},
+            {record.image for record in evaluation if not record.identity.startswith("known_")},
+        )
+
+    assert unknown_sides(first_calibration, first_evaluation) == unknown_sides(
+        second_calibration, second_evaluation
+    )
 
 
 def test_ranked_predictions_reserve_one_of_five_slots_for_new_whale() -> None:
