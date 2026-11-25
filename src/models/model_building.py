@@ -73,6 +73,19 @@ def _config_settings(config: TrainingConfig) -> dict[str, object]:
     }
 
 
+def _dataset_fingerprint(config: TrainingConfig) -> str:
+    path = config.processed_dir / "splits_manifest.json"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ValueError(f"Missing splits manifest: {path}") from None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid splits manifest {path}") from exc
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("fingerprint"), str):
+        raise ValueError(f"Invalid splits manifest {path}: missing data fingerprint")
+    return manifest["fingerprint"]
+
+
 def _split_fingerprint(
     config: TrainingConfig,
     role: str,
@@ -206,6 +219,7 @@ def model_artifact(
         "classes": list(classes),
         "threshold": threshold,
         "data_fingerprint": _file_sha256(config.data_dir / "train.csv"),
+        "dataset_fingerprint": _dataset_fingerprint(config),
         "config_fingerprint": _fingerprint(settings),
         "environment": runtime_environment(device),
         "config": settings,
@@ -590,12 +604,21 @@ def _publish_run(
     with TemporaryDirectory(prefix=".run-", dir=runs_dir) as stage:
         staged = Path(stage)
         torch.save(artifact, staged / "model.pkl")
+        shutil.copyfile(
+            config.processed_dir / "splits_manifest.json", staged / "splits_manifest.json"
+        )
         for filename, content in (("metrics.json", metrics), ("oof.json", oof)):
             (staged / filename).write_text(
                 json.dumps(content, indent=2, allow_nan=False) + "\n", encoding="utf-8"
             )
         _atomic_json(staged / "environment.json", artifact["environment"])
-        filenames = ("model.pkl", "metrics.json", "oof.json", "environment.json")
+        filenames = (
+            "model.pkl",
+            "metrics.json",
+            "oof.json",
+            "environment.json",
+            "splits_manifest.json",
+        )
         manifest = {
             "version": 1,
             "run_id": run_id,
@@ -689,6 +712,7 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
         "environment": environment,
         "dataset": COMPETITION,
         "train_csv_sha256": artifact["data_fingerprint"],
+        "dataset_fingerprint": artifact["dataset_fingerprint"],
         "architecture": "mobilenet_v3_small",
         "protocol": (
             "custom open-set assignment: digest-grouped CV folds, identity-grouped calibration, "

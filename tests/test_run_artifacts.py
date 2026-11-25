@@ -8,10 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from PIL import Image
 from src.config import training_config
 from src.data import Record, Split
 from src.models import model_building
 from torch import nn
+
+from tests.helpers.synthetic_data import make_synthetic_dataset
 
 
 def _stub_training(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -19,6 +22,10 @@ def _stub_training(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     raw_dir.mkdir()
     (raw_dir / "train.csv").write_text("Image,Id\ntrain.png,whale_a\n", encoding="utf-8")
     config = training_config(data_dir=raw_dir, artifacts_dir=tmp_path / "artifacts")
+    config.processed_dir.mkdir(parents=True, exist_ok=True)
+    (config.processed_dir / "splits_manifest.json").write_text(
+        json.dumps({"fingerprint": "stub-dataset"}), encoding="utf-8"
+    )
     record = Record("train.png", "whale_a", raw_dir / "train" / "train.png", "digest")
     split = Split(train=[record], known=[], unseen=[], excluded=[])
     prediction = {
@@ -78,17 +85,29 @@ def test_train_publishes_hashed_run_and_updates_latest_last(
         "metrics.json",
         "oof.json",
         "environment.json",
+        "splits_manifest.json",
         "manifest.json",
     }
     manifest_bytes = (run_dir / "manifest.json").read_bytes()
     manifest = json.loads(manifest_bytes)
     assert manifest["run_id"] == metrics["run_id"]
-    for filename in ("model.pkl", "metrics.json", "oof.json"):
+    for filename in (
+        "model.pkl",
+        "metrics.json",
+        "oof.json",
+        "environment.json",
+        "splits_manifest.json",
+    ):
         assert (
             manifest["files"][filename]
             == hashlib.sha256((run_dir / filename).read_bytes()).hexdigest()
         )
+    assert (run_dir / "splits_manifest.json").read_bytes() == (
+        config.processed_dir / "splits_manifest.json"
+    ).read_bytes()
+    assert metrics["dataset_fingerprint"] == "stub-dataset"
     artifact = torch.load(run_dir / "model.pkl", map_location="cpu", weights_only=True)
+    assert artifact["dataset_fingerprint"] == metrics["dataset_fingerprint"]
     assert (
         json.loads((run_dir / "environment.json").read_text(encoding="utf-8"))
         == artifact["environment"]
@@ -98,6 +117,52 @@ def test_train_publishes_hashed_run_and_updates_latest_last(
     assert latest["manifest_sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
     for filename in ("model.pkl", "metrics.json", "oof.json"):
         assert (config.artifacts_dir / filename).read_bytes() == (run_dir / filename).read_bytes()
+
+
+def test_image_digest_change_changes_published_dataset_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_dir = make_synthetic_dataset(tmp_path / "raw", n_identities=2, images_per_identity=2)
+    config = training_config(
+        data_dir=raw_dir,
+        processed_dir=tmp_path / "processed",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+    prediction = {
+        "image": "whale_0_0.png",
+        "cohort": "known",
+        "target": "whale_0",
+        "candidates": ["whale_0"],
+    }
+    monkeypatch.setattr(model_building, "CUDAConfig", lambda: SimpleNamespace(device="cpu"))
+    monkeypatch.setattr(model_building, "_file_logger", lambda *_args: logging.getLogger(__name__))
+    monkeypatch.setattr(
+        model_building,
+        "evaluate_fold",
+        lambda *_args: ([prediction], {"map_at_5": 1.0, "calibration_samples": 0}, 0.5),
+    )
+    monkeypatch.setattr(
+        model_building, "fit_model", lambda *_args, **_kwargs: (nn.Linear(1, 1), [])
+    )
+
+    first = model_building.train(config)
+    first_manifest = (config.processed_dir / "splits_manifest.json").read_bytes()
+    Image.new("RGB", (24, 16), color=(255, 0, 0)).save(raw_dir / "train" / "whale_0_0.png")
+    second = model_building.train(config)
+    second_manifest = (config.processed_dir / "splits_manifest.json").read_bytes()
+
+    assert first["train_csv_sha256"] == second["train_csv_sha256"]
+    assert first["dataset_fingerprint"] != second["dataset_fingerprint"]
+    for metrics, expected_manifest in ((first, first_manifest), (second, second_manifest)):
+        run_dir = config.artifacts_dir / "runs" / metrics["run_id"]
+        artifact = torch.load(run_dir / "model.pkl", map_location="cpu", weights_only=True)
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert artifact["dataset_fingerprint"] == metrics["dataset_fingerprint"]
+        assert (run_dir / "splits_manifest.json").read_bytes() == expected_manifest
+        assert (
+            manifest["files"]["splits_manifest.json"]
+            == hashlib.sha256((run_dir / "splits_manifest.json").read_bytes()).hexdigest()
+        )
 
 
 def test_train_metrics_report_coverage_and_custom_open_set_protocol(

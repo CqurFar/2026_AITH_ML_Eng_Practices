@@ -8,6 +8,7 @@ import pytest
 import torch
 from src.config import PreprocessingConfig, training_config
 from src.data import Record, load_records
+from src.data.prepare_data import prepare
 from src.models import model_building, model_prediction
 from src.models.model_evaluation import ranked_predictions
 from src.preprocessing import WhaleDataset, bake
@@ -53,6 +54,7 @@ def test_tiny_cpu_training_save_load_predict_parity(
     assert json.loads((config.train_dir / "preprocessing.json").read_text(encoding="utf-8")) == (
         preprocessing.to_dict()
     )
+    prepare(root, config.processed_dir, config.seed, config.n_folds)
 
     previous_threads = torch.get_num_threads()
     torch.set_num_threads(1)
