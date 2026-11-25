@@ -1,5 +1,6 @@
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
@@ -25,10 +26,17 @@ DEFAULT_CONFIG_PATH = ROOT / "config.yaml"
 
 
 @lru_cache(maxsize=32)
+def _load_config(path: Path) -> dict[str, object]:
+    return cast("dict[str, object]", yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+
+
 def load_config(path: Path | None = None) -> dict[str, object]:
-    """Read the YAML once per path; the default path stays cached for the process."""
-    target = path if path is not None else DEFAULT_CONFIG_PATH
-    return cast("dict[str, object]", yaml.safe_load(target.read_text(encoding="utf-8")) or {})
+    """Read YAML once per resolved path; the default path stays cached for the process."""
+    target = Path(path) if path is not None else DEFAULT_CONFIG_PATH
+    return _load_config(target.resolve())
+
+
+load_config.cache_clear = _load_config.cache_clear
 
 
 def _section(name: str) -> dict[str, Any]:
@@ -114,6 +122,25 @@ class PreprocessingConfig:
         self.std = tuple(section["std"])
         self.seed = int(section["seed"])
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "target_height": self.target_height,
+            "target_width": self.target_width,
+            "interpolation": self.interpolation,
+            "mean": list(self.mean),
+            "std": list(self.std),
+        }
+
+    @classmethod
+    def from_dict(cls, values: Mapping[str, object]) -> "PreprocessingConfig":
+        config = cls.__new__(cls)
+        config.target_height = int(values["target_height"])
+        config.target_width = int(values["target_width"])
+        config.interpolation = str(values["interpolation"])
+        config.mean = tuple(values["mean"])
+        config.std = tuple(values["std"])
+        return config
+
 
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
@@ -134,7 +161,6 @@ class TrainingConfig:
     epochs: int = field(default_factory=lambda: int(_section("training")["epochs"]))
     batch_size: int = field(default_factory=lambda: int(_section("training")["batch_size"]))
     num_workers: int = field(default_factory=lambda: int(_section("training")["num_workers"]))
-    image_size: int = field(default_factory=lambda: int(_section("training")["image_size"]))
     head_lr: float = field(default_factory=lambda: float(_section("training")["head_lr"]))
     backbone_lr: float = field(default_factory=lambda: float(_section("training")["backbone_lr"]))
     weight_decay: float = field(default_factory=lambda: float(_section("training")["weight_decay"]))

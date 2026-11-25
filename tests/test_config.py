@@ -30,6 +30,31 @@ def test_one_yaml_read_per_explicit_load(tmp_path: Path, monkeypatch: pytest.Mon
     assert reads == [config_path]
 
 
+def test_config_path_aliases_share_cache_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "custom.yaml"
+    config_path.write_text(MINIMAL_CONFIG, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", config_path)
+    real_read_text = Path.read_text
+    reads: list[Path] = []
+
+    def counting_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        reads.append(self)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    config_module.load_config.cache_clear()
+    default = config_module.load_config()
+    explicit = config_module.load_config(config_path)
+    relative = config_module.load_config(Path("custom.yaml"))
+    config_module.load_config.cache_clear()
+
+    assert default == explicit == relative
+    assert reads == [config_path]
+
+
 def test_relative_custom_roots_resolve_from_repo_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

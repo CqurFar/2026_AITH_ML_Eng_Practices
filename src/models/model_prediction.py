@@ -5,9 +5,11 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from src.config import TrainingConfig, training_config
-from src.models.model_building import WhaleDataset, make_model
+from src.config import PreprocessingConfig, TrainingConfig, training_config
+from src.data import Record
+from src.models.model_building import make_model
 from src.models.model_evaluation import ranked_predictions
+from src.preprocessing import WhaleDataset
 from src.steps import step
 
 
@@ -49,7 +51,9 @@ def predict(config: TrainingConfig | None = None, output_path: Path | None = Non
     model = make_model(len(classes), pretrained=False).to(device)
     model.load_state_dict(checkpoint["state_dict"])
     model.eval()
-    dataset = WhaleDataset([(name, "") for name in names], test_dir, checkpoint["image_size"])
+    preprocessing = PreprocessingConfig.from_dict(checkpoint["preprocessing"])
+    records = [Record(name, "", test_dir / name, "") for name in names]
+    dataset = WhaleDataset(records, preprocessing)
     loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=config.num_workers)
     predictions = []
     with torch.inference_mode():

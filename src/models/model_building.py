@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import logging
+import platform
 import statistics
 import subprocess
 from dataclasses import asdict, replace
@@ -13,10 +14,10 @@ from time import perf_counter
 from typing import cast
 
 import torch
-from PIL import Image, ImageOps
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
-from torchvision import models, transforms
+from torch.utils.data import DataLoader
+from torchvision import __version__ as torchvision_version
+from torchvision import models
 from torchvision.models.mobilenetv3 import MobileNetV3
 from tqdm import tqdm
 
@@ -31,7 +32,7 @@ from src.models.model_evaluation import (
     select_threshold,
     summarize,
 )
-from src.preprocessing.dataset import WhaleDataset as PreparedWhaleDataset
+from src.preprocessing import WhaleDataset
 from src.steps import step
 
 logger = logging.getLogger(__name__)
@@ -51,48 +52,6 @@ def _file_logger(config: TrainingConfig, name: str) -> logging.Logger:
     return log
 
 
-class WhaleDataset(Dataset[tuple[torch.Tensor, int | str]]):
-    def __init__(
-        self,
-        rows: list[tuple[str, str]],
-        directory: Path,
-        image_size: int,
-        class_index: dict[str, int] | None = None,
-        augment: bool = False,
-    ) -> None:
-        if image_size < 1:
-            raise ValueError("image_size must be positive")
-        self.rows = rows
-        self.directory = directory
-        self.class_index = class_index
-        augmentation = (
-            [
-                transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
-            ]
-            if augment
-            else []
-        )
-        self.transform = transforms.Compose(
-            [
-                transforms.Resize((image_size, image_size)),
-                *augmentation,
-                transforms.ToTensor(),
-                transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ]
-        )
-
-    def __len__(self) -> int:
-        return len(self.rows)
-
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, int | str]:
-        name, label = self.rows[index]
-        with Image.open(self.directory / name) as image:
-            image = ImageOps.exif_transpose(image)
-            tensor = self.transform(image.convert("RGB"))
-        return tensor, self.class_index[label] if self.class_index is not None else label
-
-
 def make_model(num_classes: int, pretrained: bool = False, dropout: float = 0.2) -> nn.Module:
     if num_classes < 1:
         raise ValueError("num_classes must be positive")
@@ -102,6 +61,46 @@ def make_model(num_classes: int, pretrained: bool = False, dropout: float = 0.2)
     model = models.mobilenet_v3_small(weights=weights, dropout=dropout)
     model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
     return model
+
+
+def model_artifact(
+    model: nn.Module,
+    *,
+    classes: list[str],
+    threshold: float,
+    preprocessing: PreprocessingConfig,
+    config: TrainingConfig,
+    device: torch.device,
+    run_id: str,
+) -> dict[str, object]:
+    settings = {
+        key: str(value) if isinstance(value, Path) else value
+        for key, value in asdict(config).items()
+    }
+    canonical_config = json.dumps(
+        settings, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return {
+        "run_id": run_id,
+        "state_dict": model.cpu().state_dict(),
+        "preprocessing": preprocessing.to_dict(),
+        "classes": list(classes),
+        "threshold": threshold,
+        "data_fingerprint": hashlib.sha256(
+            (config.data_dir / "train.csv").read_bytes()
+        ).hexdigest(),
+        "config_fingerprint": hashlib.sha256(canonical_config).hexdigest(),
+        "environment": {
+            "platform": platform.platform(),
+            "python": platform.python_version(),
+            "torch": str(torch.__version__),
+            "torchvision": str(torchvision_version),
+            "cuda": torch.version.cuda,
+            "device": str(device),
+            "git_commit": code_version(),
+        },
+        "config": settings,
+    }
 
 
 def _save_checkpoint(
@@ -180,9 +179,7 @@ def fit_model(
     records = [
         Record(name, identity, config.data_dir / "train" / name, "") for name, identity in rows
     ]
-    dataset = PreparedWhaleDataset(
-        records, PreprocessingConfig(), augment=True, train_dir=config.train_dir
-    )
+    dataset = WhaleDataset(records, PreprocessingConfig(), augment=True, train_dir=config.train_dir)
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size,
@@ -285,7 +282,7 @@ def probabilities(
         raise ValueError("Inference requires at least one row")
     use_cuda = device.type == "cuda"
     records = [Record(name, identity, directory / name, "") for name, identity in rows]
-    dataset = PreparedWhaleDataset(records, PreprocessingConfig(), train_dir=config.train_dir)
+    dataset = WhaleDataset(records, PreprocessingConfig(), train_dir=config.train_dir)
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size,
@@ -399,19 +396,23 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
     print(f"Final refit: {len(records)} images, {len(classes)} classes", flush=True)
     model, history = fit_model(sorted(records.items()), classes, config, device, config.seed)
     run_id = datetime.now(UTC).isoformat()
-    settings = {
-        key: str(value) if isinstance(value, Path) else value
-        for key, value in asdict(config).items()
-    }
     threshold = statistics.median(thresholds)
+    artifact = model_artifact(
+        model,
+        classes=classes,
+        threshold=threshold,
+        preprocessing=PreprocessingConfig(),
+        config=config,
+        device=device,
+        run_id=run_id,
+    )
+    settings = cast("dict[str, object]", artifact["config"])
     metrics: dict[str, object] = {
         **summarize(all_predictions),
         "run_id": run_id,
         "git_commit": code_version(),
         "dataset": COMPETITION,
-        "train_csv_sha256": hashlib.sha256(
-            (config.data_dir / "train.csv").read_bytes()
-        ).hexdigest(),
+        "train_csv_sha256": artifact["data_fingerprint"],
         "architecture": "mobilenet_v3_small",
         "protocol": "stratified grouped CV, held-out threshold calibration",
         "config": settings,
@@ -426,17 +427,7 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
     config.artifacts_dir.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=config.artifacts_dir) as stage:
         staged = Path(stage)
-        torch.save(
-            {
-                "run_id": run_id,
-                "state_dict": model.cpu().state_dict(),
-                "classes": classes,
-                "threshold": threshold,
-                "image_size": config.image_size,
-                "config": settings,
-            },
-            staged / "model.pkl",
-        )
+        torch.save(artifact, staged / "model.pkl")
         for filename, content in (("metrics.json", metrics), ("oof.json", all_predictions)):
             (staged / filename).write_text(
                 json.dumps(content, indent=2, allow_nan=False) + "\n", encoding="utf-8"
