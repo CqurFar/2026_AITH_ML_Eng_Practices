@@ -77,11 +77,11 @@ def prepared_file(prepared_dir: Path, image_name: str) -> Path:
 
 def save_prepared(tensor: torch.Tensor, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.save(path, tensor.numpy())
+    np.save(path, tensor.permute(1, 2, 0).numpy())
 
 
 def load_prepared(path: Path) -> torch.Tensor:
-    return torch.from_numpy(np.load(path))
+    return torch.from_numpy(np.load(path)).permute(2, 0, 1)
 
 
 def save_preprocessing_manifest(directory: Path, config: PreprocessingConfig) -> None:

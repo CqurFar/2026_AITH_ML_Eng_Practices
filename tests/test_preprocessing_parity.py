@@ -12,6 +12,7 @@ from src.preprocessing import (
     WhaleDataset,
     bake,
     load_image,
+    load_prepared,
     prepared_file,
     preprocess_image,
     save_prepared,
@@ -90,6 +91,22 @@ def _baked_record(tmp_path):
     image_path = tmp_path / "whale.png"
     Image.new("RGB", (140, 90), color=(120, 60, 30)).save(image_path)
     return PreprocessingConfig(), Record(image_path.name, "whale_a", image_path, "digest")
+
+
+def test_baked_file_is_hwc_uint8_and_loads_as_chw(tmp_path) -> None:
+    preprocessing, record = _baked_record(tmp_path)
+    prepared_dir = tmp_path / "prepared"
+    assert bake([record], preprocessing, train_dir=prepared_dir) == 1
+
+    stored = np.load(prepared_file(prepared_dir, record.image), allow_pickle=False)
+    assert stored.shape == (256, 512, 3)
+    assert stored.dtype == np.uint8
+    loaded = load_prepared(prepared_file(prepared_dir, record.image))
+    assert loaded.shape == (3, 256, 512)
+    assert torch.equal(
+        WhaleDataset([record], preprocessing, train_dir=prepared_dir)[0][0],
+        preprocess_image(load_image(record.path), preprocessing),
+    )
 
 
 def test_bake_records_preprocessing_identity(tmp_path) -> None:
