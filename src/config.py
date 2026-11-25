@@ -1,8 +1,9 @@
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -20,14 +21,35 @@ if not logger.handlers:
 COMPETITION = "humpback-whale-identification"
 ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = ROOT / "data" / "raw" / COMPETITION
+DEFAULT_CONFIG_PATH = ROOT / "config.yaml"
 
 
-def _data() -> dict[str, Any]:
-    return yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8")) or {}
+@lru_cache(maxsize=32)
+def load_config(path: Path | None = None) -> dict[str, object]:
+    """Read the YAML once per path; the default path stays cached for the process."""
+    target = path if path is not None else DEFAULT_CONFIG_PATH
+    return cast("dict[str, object]", yaml.safe_load(target.read_text(encoding="utf-8")) or {})
+
+
+def _section(name: str) -> dict[str, Any]:
+    return cast("dict[str, Any]", load_config()[name])
 
 
 def _p(section: dict[str, Any], key: str) -> Path:
     return Path(ROOT, section[key])
+
+
+def _resolve(path: Path) -> Path:
+    candidate = Path(path)
+    return candidate if candidate.is_absolute() else ROOT / candidate
+
+
+def _reject_overlap(raw: Path, outputs: list[Path]) -> None:
+    source = raw.resolve()
+    for output in outputs:
+        target = output.resolve()
+        if source == target or target.is_relative_to(source) or source.is_relative_to(target):
+            raise ValueError(f"raw data directory overlaps output directory: {raw} vs {output}")
 
 
 class CUDAConfig:
@@ -63,7 +85,7 @@ class CUDAConfig:
 
 class AuditConfig:
     def __init__(self) -> None:
-        section = _data()["audit"]
+        section = _section("audit")
         self.data_dir = _p(section, "data_dir")
         self.processed_dir = _p(section, "processed_dir")
         self.seed = int(section["seed"])
@@ -72,7 +94,7 @@ class AuditConfig:
 
 class EDAConfig:
     def __init__(self) -> None:
-        section = _data()["eda"]
+        section = _section("eda")
         self.data_dir = _p(section, "data_dir")
         self.eda_dir = _p(section, "eda_dir")
         self.figures_dir = _p(section, "figures_dir")
@@ -82,7 +104,7 @@ class EDAConfig:
 
 class PreprocessingConfig:
     def __init__(self) -> None:
-        section = _data()["preprocessing"]
+        section = _section("preprocessing")
         self.data_dir = _p(section, "data_dir")
         self.train_dir = _p(section, "train_dir")
         self.target_height = int(section["target_height"])
@@ -95,24 +117,63 @@ class PreprocessingConfig:
 
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
-    data_dir: Path = _p(_data()["training"], "data_dir")
-    processed_dir: Path = _p(_data()["training"], "processed_dir")
-    artifacts_dir: Path = _p(_data()["training"], "artifacts_dir")
-    checkpoints_dir: Path = _p(_data()["training"], "checkpoints_dir")
-    logs_dir: Path = _p(_data()["training"], "logs_dir")
-    train_dir: Path = _p(_data()["training"], "train_dir")
-    seed: int = int(_data()["training"]["seed"])
-    n_folds: int = int(_data()["training"]["n_folds"])
-    epochs: int = int(_data()["training"]["epochs"])
-    batch_size: int = int(_data()["training"]["batch_size"])
-    num_workers: int = int(_data()["training"]["num_workers"])
-    image_size: int = int(_data()["training"]["image_size"])
-    head_lr: float = float(_data()["training"]["head_lr"])
-    backbone_lr: float = float(_data()["training"]["backbone_lr"])
-    weight_decay: float = float(_data()["training"]["weight_decay"])
-    label_smoothing: float = float(_data()["training"]["label_smoothing"])
-    grad_clip: float = float(_data()["training"]["grad_clip"])
-    dropout: float = float(_data()["training"]["dropout"])
-    unfrozen_blocks: int = int(_data()["training"]["unfrozen_blocks"])
-    pretrained: bool = bool(_data()["training"]["pretrained"])
-    pin_memory: bool = bool(_data()["training"]["pin_memory"])
+    data_dir: Path = field(default_factory=lambda: _p(_section("training"), "data_dir"))
+    processed_dir: Path = field(default_factory=lambda: _p(_section("training"), "processed_dir"))
+    artifacts_dir: Path = field(default_factory=lambda: _p(_section("training"), "artifacts_dir"))
+    checkpoints_dir: Path = field(
+        default_factory=lambda: _p(_section("training"), "artifacts_dir") / "checkpoints"
+    )
+    logs_dir: Path = field(
+        default_factory=lambda: _p(_section("training"), "artifacts_dir") / "logs"
+    )
+    train_dir: Path = field(
+        default_factory=lambda: _p(_section("training"), "processed_dir") / "train"
+    )
+    seed: int = field(default_factory=lambda: int(_section("training")["seed"]))
+    n_folds: int = field(default_factory=lambda: int(_section("training")["n_folds"]))
+    epochs: int = field(default_factory=lambda: int(_section("training")["epochs"]))
+    batch_size: int = field(default_factory=lambda: int(_section("training")["batch_size"]))
+    num_workers: int = field(default_factory=lambda: int(_section("training")["num_workers"]))
+    image_size: int = field(default_factory=lambda: int(_section("training")["image_size"]))
+    head_lr: float = field(default_factory=lambda: float(_section("training")["head_lr"]))
+    backbone_lr: float = field(default_factory=lambda: float(_section("training")["backbone_lr"]))
+    weight_decay: float = field(default_factory=lambda: float(_section("training")["weight_decay"]))
+    label_smoothing: float = field(
+        default_factory=lambda: float(_section("training")["label_smoothing"])
+    )
+    grad_clip: float = field(default_factory=lambda: float(_section("training")["grad_clip"]))
+    dropout: float = field(default_factory=lambda: float(_section("training")["dropout"]))
+    unfrozen_blocks: int = field(
+        default_factory=lambda: int(_section("training")["unfrozen_blocks"])
+    )
+    pretrained: bool = field(default_factory=lambda: bool(_section("training")["pretrained"]))
+    pin_memory: bool = field(default_factory=lambda: bool(_section("training")["pin_memory"]))
+
+
+def training_config(
+    *,
+    data_dir: Path | None = None,
+    processed_dir: Path | None = None,
+    artifacts_dir: Path | None = None,
+) -> TrainingConfig:
+    """Build a resolved config; child paths follow the chosen roots."""
+    defaults = TrainingConfig()
+    roots = {
+        "data_dir": _resolve(data_dir) if data_dir is not None else defaults.data_dir,
+        "processed_dir": (
+            _resolve(processed_dir) if processed_dir is not None else defaults.processed_dir
+        ),
+        "artifacts_dir": (
+            _resolve(artifacts_dir) if artifacts_dir is not None else defaults.artifacts_dir
+        ),
+    }
+    children = {
+        "train_dir": roots["processed_dir"] / "train",
+        "checkpoints_dir": roots["artifacts_dir"] / "checkpoints",
+        "logs_dir": roots["artifacts_dir"] / "logs",
+    }
+    _reject_overlap(
+        roots["data_dir"],
+        [roots["processed_dir"], roots["artifacts_dir"], *children.values()],
+    )
+    return replace(defaults, **roots, **children)

@@ -26,9 +26,6 @@ training:
   data_dir: data/raw/humpback-whale-identification
   processed_dir: data/processed/humpback-whale-identification
   artifacts_dir: artifacts
-  checkpoints_dir: artifacts/checkpoints
-  logs_dir: artifacts/logs
-  train_dir: data/processed/humpback-whale-identification/train
   seed: 42
   n_folds: 3
   epochs: 5

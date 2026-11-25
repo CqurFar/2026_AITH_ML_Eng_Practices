@@ -7,7 +7,7 @@ from typing import TypedDict
 
 import torch
 
-from src.config import TrainingConfig
+from src.config import training_config
 from src.data import Record
 from src.steps import step
 
@@ -116,7 +116,7 @@ def summarize(rows: list[Prediction]) -> dict[str, float | int]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--predictions", type=Path, default=TrainingConfig().artifacts_dir / "oof.json"
+        "--predictions", type=Path, default=training_config().artifacts_dir / "oof.json"
     )
     args = parser.parse_args()
     rows = json.loads(args.predictions.read_text(encoding="utf-8"))

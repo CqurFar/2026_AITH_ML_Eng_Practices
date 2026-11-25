@@ -20,7 +20,7 @@ from torchvision import models, transforms
 from torchvision.models.mobilenetv3 import MobileNetV3
 from tqdm import tqdm
 
-from src.config import COMPETITION, CUDAConfig, PreprocessingConfig, TrainingConfig
+from src.config import COMPETITION, CUDAConfig, PreprocessingConfig, TrainingConfig, training_config
 from src.data import Record, Split
 from src.data.prepare_data import prepare
 from src.models.model_evaluation import (
@@ -363,7 +363,7 @@ def code_version() -> str | None:
 
 
 def train(config: TrainingConfig | None = None) -> dict[str, object]:
-    config = config or TrainingConfig()
+    config = config or training_config()
     start = perf_counter()
     device = torch.device(CUDAConfig().device)
     print(f"Device: {device}", flush=True)
@@ -451,7 +451,7 @@ def train(config: TrainingConfig | None = None) -> dict[str, object]:
 
 @step("train")
 def main() -> None:
-    defaults = TrainingConfig()
+    defaults = training_config()
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, default=defaults.data_dir)
     parser.add_argument("--processed-dir", type=Path, default=defaults.processed_dir)
@@ -460,16 +460,13 @@ def main() -> None:
     parser.add_argument("--folds", type=int, default=defaults.n_folds)
     parser.add_argument("--no-pretrained", action="store_true")
     args = parser.parse_args()
+    config = training_config(
+        data_dir=args.data_dir,
+        processed_dir=args.processed_dir,
+        artifacts_dir=args.artifacts_dir,
+    )
     train(
-        replace(
-            defaults,
-            data_dir=args.data_dir,
-            processed_dir=args.processed_dir,
-            artifacts_dir=args.artifacts_dir,
-            epochs=args.epochs,
-            n_folds=args.folds,
-            pretrained=not args.no_pretrained,
-        )
+        replace(config, epochs=args.epochs, n_folds=args.folds, pretrained=not args.no_pretrained)
     )
 
 

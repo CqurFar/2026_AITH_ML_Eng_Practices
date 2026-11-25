@@ -9,10 +9,8 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from src.config import COMPETITION, RAW_DIR
+from src.config import COMPETITION, AuditConfig
 from src.data.data import audit_data
-
-DEFAULT_DIR = RAW_DIR
 
 
 def _extract(archive: Path, destination: Path) -> None:
@@ -35,8 +33,8 @@ def _extract(archive: Path, destination: Path) -> None:
                 shutil.copyfileobj(src, dst)
 
 
-def get_data(destination: str | Path = DEFAULT_DIR, timeout: float = 3600) -> Path:
-    destination = Path(destination)
+def get_data(destination: str | Path | None = None, timeout: float = 3600) -> Path:
+    destination = Path(destination) if destination is not None else AuditConfig().data_dir
     if destination.exists():
         if not destination.is_dir():
             raise FileExistsError(f"Destination is not a directory: {destination}")
@@ -118,7 +116,7 @@ def get_data(destination: str | Path = DEFAULT_DIR, timeout: float = 3600) -> Pa
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--destination", type=Path, default=DEFAULT_DIR)
+    parser.add_argument("--destination", type=Path)
     parser.add_argument("--timeout", type=float, default=3600)
     args = parser.parse_args()
     print(get_data(args.destination, args.timeout))

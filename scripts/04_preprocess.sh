@@ -2,4 +2,4 @@
 set -euo pipefail #
 cd "$(dirname "$0")/.." #
 UV="${UV:-uv}" #
-"$UV" run python -m src.preprocessing.bake #
+"$UV" run --locked python -m src.preprocessing.bake #

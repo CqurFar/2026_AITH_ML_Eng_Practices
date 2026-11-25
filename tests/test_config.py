@@ -1,0 +1,85 @@
+import importlib
+from pathlib import Path
+
+import pytest
+import src.config as config_module
+
+MINIMAL_CONFIG = """\
+audit:
+  data_dir: data/raw/example
+training:
+  seed: 42
+"""
+
+
+def test_one_yaml_read_per_explicit_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "custom.yaml"
+    config_path.write_text(MINIMAL_CONFIG, encoding="utf-8")
+    real_read_text = Path.read_text
+    reads: list[Path] = []
+
+    def counting_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        reads.append(self)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    config_module.load_config.cache_clear()
+    first = config_module.load_config(config_path)
+    second = config_module.load_config(config_path)
+    assert first == second
+    assert reads == [config_path]
+
+
+def test_relative_custom_roots_resolve_from_repo_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = config_module.training_config(
+        data_dir=Path("data/raw/custom"),
+        processed_dir=Path("data/processed/custom"),
+        artifacts_dir=Path("artifacts/custom"),
+    )
+    root = config_module.ROOT
+    assert config.data_dir == root / "data/raw/custom"
+    assert config.processed_dir == root / "data/processed/custom"
+    assert config.artifacts_dir == root / "artifacts/custom"
+
+
+def test_child_paths_follow_custom_roots(tmp_path: Path) -> None:
+    config = config_module.training_config(
+        data_dir=tmp_path / "raw",
+        processed_dir=tmp_path / "processed",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+    assert config.train_dir == tmp_path / "processed" / "train"
+    assert config.checkpoints_dir == tmp_path / "artifacts" / "checkpoints"
+    assert config.logs_dir == tmp_path / "artifacts" / "logs"
+
+
+@pytest.mark.parametrize(
+    ("raw", "processed", "artifacts"),
+    [
+        (Path("data/raw/x"), Path("data/raw/x"), Path("artifacts/x")),
+        (Path("data/raw"), Path("data/raw/x"), Path("artifacts/x")),
+        (Path("data/processed/x/train"), Path("data/processed/x"), Path("artifacts/x")),
+        (Path("artifacts/x/model"), Path("data/processed/x"), Path("artifacts/x")),
+    ],
+)
+def test_raw_output_overlap_raises(raw: Path, processed: Path, artifacts: Path) -> None:
+    with pytest.raises(ValueError, match="overlap"):
+        config_module.training_config(
+            data_dir=raw, processed_dir=processed, artifacts_dir=artifacts
+        )
+
+
+def test_import_does_not_read_config_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_read_text = Path.read_text
+    reads: list[Path] = []
+
+    def counting_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        reads.append(self)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    importlib.reload(config_module)
+    assert not any(path.name == "config.yaml" for path in reads)

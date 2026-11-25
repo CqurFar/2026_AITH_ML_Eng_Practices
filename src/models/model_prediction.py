@@ -1,12 +1,11 @@
 import argparse
 import csv
-from dataclasses import replace
 from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
-from src.config import TrainingConfig
+from src.config import TrainingConfig, training_config
 from src.models.model_building import WhaleDataset, make_model
 from src.models.model_evaluation import ranked_predictions
 from src.steps import step
@@ -30,7 +29,7 @@ def validate_submission(
 
 
 def predict(config: TrainingConfig | None = None, output_path: Path | None = None) -> Path:
-    config = config or TrainingConfig()
+    config = config or training_config()
     with (config.data_dir / "sample_submission.csv").open(newline="", encoding="utf-8-sig") as file:
         reader = csv.DictReader(file)
         if reader.fieldnames != ["Image", "Id"]:
@@ -71,15 +70,14 @@ def predict(config: TrainingConfig | None = None, output_path: Path | None = Non
 
 @step("predict")
 def main() -> None:
-    defaults = TrainingConfig()
+    defaults = training_config()
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, default=defaults.data_dir)
     parser.add_argument("--artifacts-dir", type=Path, default=defaults.artifacts_dir)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    predict(
-        replace(defaults, data_dir=args.data_dir, artifacts_dir=args.artifacts_dir), args.output
-    )
+    config = training_config(data_dir=args.data_dir, artifacts_dir=args.artifacts_dir)
+    predict(config, args.output)
 
 
 if __name__ == "__main__":
