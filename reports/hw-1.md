@@ -5,7 +5,7 @@
 1. **Data Ingestion** — загрузка с Kaggle в `data/raw/`
 2. **Data Audit** — проверка данных, структуры и разметки
 3. **EDA** — исследование распределений, дубликатов и метаданных изображений
-4. **Preprocessing** — ресайз, центрирование, нормализация по статистикам, аугментация на GPU при обучении
+4. **Preprocessing** — ресайз, центрирование, нормализация по статистикам, аугментация
 5. **Training** — модель `MobileNetV3-Small` с 3-fold CV, есть чекпоинты после каждой эпохи
 8. **Evaluation** — оценка качества модели, OOF метрики по группам (`known / unseen_identity / new_whale`)
 9. **Prediction** — `artifacts/hw1-baseline/submission.csv` (top-5 кандидатов на тесте)
@@ -20,7 +20,6 @@
 - `artifacts/hw1-baseline/submission.csv` — submission на тесте
 - `artifacts/hw1-baseline/checkpoints/fit_<role>_<fold-or-final>_<hash>.pt` — чекпоинты
 - `artifacts/hw1-baseline/logs/` — логи обучения
-- `artifacts/hw1-baseline/eda/` — артефакты eda
 
 ## Out-of-Fold
 
