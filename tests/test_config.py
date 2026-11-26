@@ -87,6 +87,32 @@ def test_training_loader_defaults() -> None:
     assert config.num_workers == 8
     assert config.pin_memory is True
     assert config.prefetch_factor == 4
+    assert config.augment_on_device is True
+
+
+@pytest.mark.parametrize("augment_on_device", [0, 1, "true", None])
+def test_training_config_rejects_non_boolean_augment_on_device(augment_on_device: object) -> None:
+    with pytest.raises(ValueError, match="augment_on_device"):
+        config_module.TrainingConfig(augment_on_device=augment_on_device)
+
+
+def test_training_config_rejects_non_boolean_yaml_augment_on_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "custom.yaml"
+    config_path.write_text(
+        config_module.DEFAULT_CONFIG_PATH.read_text(encoding="utf-8").replace(
+            "augment_on_device: true", 'augment_on_device: "false"'
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", config_path)
+    config_module.load_config.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="augment_on_device"):
+            config_module.TrainingConfig()
+    finally:
+        config_module.load_config.cache_clear()
 
 
 @pytest.mark.parametrize("prefetch_factor", [0, -1])

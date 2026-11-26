@@ -34,6 +34,7 @@ from src.models.model_evaluation import (
     summarize,
 )
 from src.preprocessing import WhaleDataset, normalize_batch
+from src.preprocessing.augmentation import train_augment
 from src.steps import step
 
 logger = logging.getLogger(__name__)
@@ -329,13 +330,15 @@ def fit_model(
     path = checkpoint_path(config, context)
     torch.manual_seed(seed)
     use_cuda = device.type == "cuda"
+    augment_on_device = config.augment_on_device and use_cuda
+    augmentation = train_augment() if augment_on_device else None
     records = [
         Record(name, identity, config.data_dir / "train" / name, "") for name, identity in rows
     ]
     dataset = WhaleDataset(
         records,
         preprocessing,
-        augment=True,
+        augment=not augment_on_device,
         train_dir=config.train_dir,
         normalize_on_device=True,
     )
@@ -394,6 +397,8 @@ def fit_model(
                 for block in unfrozen:
                     block.eval()
             images = images.to(device, non_blocking=use_cuda)
+            if augmentation is not None:
+                images = augmentation(images)
             images = normalize_batch(images, preprocessing, device)
             label_ids = torch.tensor(
                 [class_index[label] for label in labels], dtype=torch.long, device=device

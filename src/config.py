@@ -183,10 +183,15 @@ class TrainingConfig:
     prefetch_factor: int = field(
         default_factory=lambda: int(_section("training")["prefetch_factor"])
     )
+    augment_on_device: bool = field(
+        default_factory=lambda: cast("bool", _section("training")["augment_on_device"])
+    )
 
     def __post_init__(self) -> None:
         if type(self.prefetch_factor) is not int or self.prefetch_factor < 1:
             raise ValueError("prefetch_factor must be a positive integer")
+        if type(self.augment_on_device) is not bool:
+            raise ValueError("augment_on_device must be a boolean")
 
 
 def training_config(
