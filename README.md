@@ -22,9 +22,9 @@
 
 ## HW-1 baseline
 
-- Commit: `335fc0fe6cc5fce53b8f8400d8137fe11f0051c5`
-- Run ID: `20261125T213244777337Z`
-- OOF MAP@5: `0.5949818521363274`
+- Commit: `76a354f1bcd799c554a11a3bd2269342b14ff512`
+- Run ID: `20261126T044644889736Z`
+- OOF MAP@5: `0.570978478591545`
 - Артефакты: `artifacts/hw1-baseline/`
 - Отчёт: [reports/hw-1.md](reports/hw-1.md)
 

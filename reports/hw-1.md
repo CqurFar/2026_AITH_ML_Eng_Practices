@@ -5,13 +5,15 @@
 1. **Data Ingestion** — загрузка с Kaggle в `data/raw/`
 2. **Data Audit** — проверка данных, структуры и разметки
 3. **EDA** — исследование распределений, дубликатов и метаданных изображений
-4. **Preprocessing** — ресайз, центрирование, нормализация по статистикам, аугментация
+4. **Preprocessing** — ресайз, центрирование, нормализация по статистикам, аугментация на GPU при обучении
 5. **Training** — модель `MobileNetV3-Small` с 3-fold CV, есть чекпоинты после каждой эпохи
 8. **Evaluation** — оценка качества модели, OOF метрики по группам (`known / unseen_identity / new_whale`)
 9. **Prediction** — `artifacts/hw1-baseline/submission.csv` (top-5 кандидатов на тесте)
 
 ## Результаты
 
+- Commit: `76a354f1bcd799c554a11a3bd2269342b14ff512`
+- Run ID: `20261126T044644889736Z`
 - `artifacts/hw1-baseline/model.pkl` — обученная модель
 - `artifacts/hw1-baseline/metrics.json` — метрики
 - `artifacts/hw1-baseline/oof.json` — out-of-fold предсказания
@@ -25,16 +27,16 @@
 ```bash
 {
   "samples": 22133,
-  "map_at_5": 0.5949818521363274,
-  "top_1_accuracy": 0.5408665793159535,
-  "top_5_recall": 0.7557041521709664,
-  "unknown_first_rate": 0.7074955948131749,
+  "map_at_5": 0.570978478591545,
+  "top_1_accuracy": 0.5114083043419329,
+  "top_5_recall": 0.7545746170876068,
+  "unknown_first_rate": 0.662043103058781,
   "known_samples": 8155,
-  "known_map_at_5": 0.23489066012671161,
+  "known_map_at_5": 0.2343919885550787,
   "unseen_identity_samples": 8179,
-  "unseen_identity_map_at_5": 0.7832497860374129,
+  "unseen_identity_map_at_5": 0.7420711578432571,
   "new_whale_samples": 5799,
-  "new_whale_map_at_5": 0.8358337644421452
+  "new_whale_map_at_5": 0.8030005173305743
 }
 ```
 
