@@ -30,6 +30,8 @@
 
 ## Установка и запуск
 
+Требуется Python 3.11+.
+
 ```bash
 git clone https://github.com/CqurFar/2026_AITH_ML_Eng_Practices.git
 cd 2026_AITH_ML_Eng_Practices
@@ -38,14 +40,15 @@ uv sync --locked                                  # зависимости
 uv run --locked pre-commit run --all-files        # проверка кода
 
 uv run --locked kaggle auth login                 # авторизация на kaggle
-uv run --locked python -m src.data.get_data       # загрузка датасета
-uv run --locked python -m src.data.prepare_data   # проверка данных
-uv run --locked python -m src.visualization.integrity   # eda и viz
-uv run --locked python -m src.preprocessing.bake  # предобработка и сохранение тензоров
-
-uv run --locked python -m src.models.model_building   # обучение
-uv run --locked python -m src.models.model_evaluation # оценка
-uv run --locked python -m src.models.model_prediction # предсказания
+uv run --locked python -m src.main --help         # список стадий
+uv run --locked python -m src.main download       # загрузка датасета
+uv run --locked python -m src.main prepare        # проверка данных
+uv run --locked python -m src.main eda            # eda и viz
+uv run --locked python -m src.main bake           # предобработка и сохранение тензоров
+uv run --locked python -m src.main train          # обучение
+uv run --locked python -m src.main evaluate       # оценка
+uv run --locked python -m src.main predict        # предсказания
+uv run --locked python -m src.main run-all        # весь пайплайн
 ```
 
 ## Есть шимы, если важно, чтобы команды были как в ТЗ
