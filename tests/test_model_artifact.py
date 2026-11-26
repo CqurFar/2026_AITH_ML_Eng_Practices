@@ -23,6 +23,13 @@ EXPECTED_PREPROCESSING = {
 }
 
 
+def write_splits_manifest(processed_dir: Path) -> None:
+    processed_dir.mkdir()
+    (processed_dir / "splits_manifest.json").write_text(
+        json.dumps({"fingerprint": "test-dataset"}), encoding="utf-8"
+    )
+
+
 def test_preprocessing_settings_round_trip() -> None:
     preprocessing = PreprocessingConfig()
     payload = preprocessing.to_dict()
@@ -37,7 +44,12 @@ def test_model_artifact_round_trip_preserves_preprocessing_and_class_order(tmp_p
     raw_dir.mkdir()
     train_csv = b"Image,Id\nfirst.jpg,whale_b\nsecond.jpg,whale_a\n"
     (raw_dir / "train.csv").write_bytes(train_csv)
-    config = training_config(data_dir=raw_dir, artifacts_dir=tmp_path / "artifacts")
+    write_splits_manifest(tmp_path / "processed")
+    config = training_config(
+        data_dir=raw_dir,
+        processed_dir=tmp_path / "processed",
+        artifacts_dir=tmp_path / "artifacts",
+    )
     preprocessing = PreprocessingConfig()
     classes = ["whale_b", "whale_a"]
     artifact = model_building.model_artifact(
@@ -61,6 +73,7 @@ def test_model_artifact_round_trip_preserves_preprocessing_and_class_order(tmp_p
     assert required <= artifact.keys()
     assert "image_size" not in artifact
     assert artifact["data_fingerprint"] == hashlib.sha256(train_csv).hexdigest()
+    assert artifact["dataset_fingerprint"] == "test-dataset"
     canonical_config = json.dumps(artifact["config"], sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
     )
@@ -88,7 +101,12 @@ def test_train_reuses_one_preprocessing_instance(
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     (raw_dir / "train.csv").write_text("Image,Id\ntrain.png,whale_a\n", encoding="utf-8")
-    config = training_config(data_dir=raw_dir, artifacts_dir=tmp_path / "artifacts")
+    write_splits_manifest(tmp_path / "processed")
+    config = training_config(
+        data_dir=raw_dir,
+        processed_dir=tmp_path / "processed",
+        artifacts_dir=tmp_path / "artifacts",
+    )
     record = Record("train.png", "whale_a", raw_dir / "train" / "train.png", "digest")
     split = Split(train=[record], known=[], unseen=[], excluded=[])
     prediction = {
