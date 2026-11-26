@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -10,6 +11,12 @@ from tempfile import NamedTemporaryFile
 
 def read_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def fsync_file(path: Path) -> None:
+    with path.open("rb+") as file:
+        file.flush()
+        os.fsync(file.fileno())
 
 
 def write_json_atomic(
@@ -32,6 +39,7 @@ def write_json_atomic(
         temporary = Path(file.name)
     try:
         temporary.write_text(text, encoding="utf-8", newline="\n")
+        fsync_file(temporary)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)

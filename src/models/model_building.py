@@ -20,7 +20,7 @@ from torchvision import __version__ as torchvision_version
 from torchvision import models
 from torchvision.models.mobilenetv3 import MobileNetV3
 from tqdm import tqdm
-from utils import file_logger, fingerprint, sha256_file, utc_run_id, write_json_atomic
+from utils import file_logger, fingerprint, fsync_file, sha256_file, utc_run_id, write_json_atomic
 
 from src.config import COMPETITION, CUDAConfig, PreprocessingConfig, TrainingConfig, training_config
 from src.data import Record, Split
@@ -229,6 +229,7 @@ def _save_checkpoint(
             },
             temporary,
         )
+        fsync_file(temporary)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -579,6 +580,7 @@ def _publish_run(
     with TemporaryDirectory(prefix=".run-", dir=runs_dir) as stage:
         staged = Path(stage)
         torch.save(artifact, staged / "model.pkl")
+        fsync_file(staged / "model.pkl")
         shutil.copyfile(
             config.processed_dir / "splits_manifest.json", staged / "splits_manifest.json"
         )

@@ -1,11 +1,13 @@
 import json
 import logging
+import os
 import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import utils
 from utils import (
     canonical_json,
     file_logger,
@@ -42,6 +44,26 @@ def test_read_json_reads_utf8_value(tmp_path: Path) -> None:
     assert read_json(path) == {"name": "кот", "items": [1, 2]}
 
 
+def test_fsync_file_calls_fsync_for_real_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "value.bin"
+    path.write_bytes(b"abc")
+    descriptors: list[int] = []
+    real_fsync = os.fsync
+
+    def tracked_fsync(descriptor: int) -> None:
+        descriptors.append(descriptor)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", tracked_fsync)
+
+    assert utils.fsync_file(path) is None
+
+    assert len(descriptors) == 1
+    assert path.read_bytes() == b"abc"
+
+
 def test_write_json_atomic_replaces_target_from_same_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -65,6 +87,31 @@ def test_write_json_atomic_replaces_target_from_same_directory(
     assert source.parent == target.parent == path.parent
     assert source != target
     assert not source.exists()
+
+
+def test_write_json_atomic_fsyncs_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "value.json"
+    events: list[str] = []
+    real_fsync = os.fsync
+    real_replace = Path.replace
+
+    def tracked_fsync(descriptor: int) -> None:
+        real_fsync(descriptor)
+        events.append("fsync")
+
+    def tracked_replace(source, target):
+        events.append("replace")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(os, "fsync", tracked_fsync)
+    monkeypatch.setattr(Path, "replace", tracked_replace)
+
+    write_json_atomic(path, {"new": True})
+
+    assert events == ["fsync", "replace"]
+    assert read_json(path) == {"new": True}
 
 
 def test_write_json_atomic_failure_preserves_target_and_cleans_temporary(tmp_path: Path) -> None:

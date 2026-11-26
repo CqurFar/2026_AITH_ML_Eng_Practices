@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -212,6 +213,56 @@ def test_checkpoint_save_failure_preserves_existing_file(
     assert path.read_bytes() == original
     assert list(path.parent.glob("*.tmp")) == []
     monkeypatch.setattr(model_building.torch, "save", real_save)
+
+
+def test_checkpoint_save_fsyncs_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    context = _fit_context(config)
+    path = model_building.checkpoint_path(config, context)
+    model, optimizer, scheduler = _training_state()
+    events: list[str] = []
+    real_fsync = os.fsync
+    real_replace = Path.replace
+
+    def tracked_fsync(descriptor: int) -> None:
+        real_fsync(descriptor)
+        events.append("fsync")
+
+    def tracked_replace(source, target):
+        events.append("replace")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(os, "fsync", tracked_fsync)
+    monkeypatch.setattr(Path, "replace", tracked_replace)
+
+    model_building._save_checkpoint(path, context, 1, model, optimizer, scheduler, _history(1))
+
+    assert events == ["fsync", "replace"]
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    assert checkpoint["epoch"] == 1
+
+
+def test_checkpoint_fsync_failure_preserves_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    context = _fit_context(config)
+    path = model_building.checkpoint_path(config, context)
+    model, optimizer, scheduler = _training_state()
+    model_building._save_checkpoint(path, context, 0, model, optimizer, scheduler, _history(0))
+    original = path.read_bytes()
+
+    def failing_fsync(descriptor: int) -> None:
+        raise OSError("sync failed")
+
+    monkeypatch.setattr(os, "fsync", failing_fsync)
+    with pytest.raises(OSError, match="sync failed"):
+        model_building._save_checkpoint(path, context, 1, model, optimizer, scheduler, _history(1))
+
+    assert path.read_bytes() == original
+    assert list(path.parent.glob("*.tmp")) == []
 
 
 def test_checkpoint_load_uses_weights_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
