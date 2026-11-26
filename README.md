@@ -22,7 +22,7 @@
 
 ## HW-1 baseline
 
-- Commit: `76a354f1bcd799c554a11a3bd2269342b14ff512`
+- Commit: `2e619bb0a453933193c5439924548cd7364af8e0`
 - Run ID: `20261126T044644889736Z`
 - OOF MAP@5: `0.570978478591545`
 - Артефакты: `artifacts/hw1-baseline/`
