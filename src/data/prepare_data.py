@@ -1,11 +1,10 @@
 import json
 from pathlib import Path
 
-from utils import fingerprint, write_json_atomic
-
 from src.config import AuditConfig
 from src.data import Split, audit_data, build_folds, load_records
 from src.steps import step
+from src.utils import fingerprint, write_json_atomic
 
 
 def _persist_manifest(path: Path, manifest: dict[str, object]) -> None:

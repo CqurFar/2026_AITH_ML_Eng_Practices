@@ -1,10 +1,9 @@
 import csv
 import json
 
-from utils import write_json_atomic
-
 from src.config import EDAConfig
 from src.data.data import audit_data
+from src.utils import write_json_atomic
 
 
 def main() -> None:

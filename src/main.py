@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-from utils import run_module
+from src.utils import run_module
 
 STAGE_MODULES = {
     "download": ("src.data.get_data",),

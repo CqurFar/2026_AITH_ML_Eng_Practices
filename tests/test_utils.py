@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-import utils
-from utils import (
+from src import utils
+from src.utils import (
     canonical_json,
     file_logger,
     fingerprint,

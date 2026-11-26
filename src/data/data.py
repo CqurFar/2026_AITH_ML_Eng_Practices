@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
-from utils import write_json_atomic
+
+from src.utils import write_json_atomic
 
 
 @dataclass(frozen=True, slots=True)

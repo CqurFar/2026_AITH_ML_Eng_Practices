@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import TypedDict
 
 import torch
-from utils import read_json
 
 from src.config import training_config
 from src.data import Record
 from src.steps import step
+from src.utils import read_json
 
 UNKNOWN = "new_whale"
 

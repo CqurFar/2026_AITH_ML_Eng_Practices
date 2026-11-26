@@ -1,7 +1,7 @@
 import sys
 
-import main as cli
 import pytest
+from src import main as cli
 
 SINGLE_STAGES = {
     "download": "src.data.get_data",

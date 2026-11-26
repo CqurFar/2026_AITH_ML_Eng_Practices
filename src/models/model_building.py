@@ -20,7 +20,6 @@ from torchvision import __version__ as torchvision_version
 from torchvision import models
 from torchvision.models.mobilenetv3 import MobileNetV3
 from tqdm import tqdm
-from utils import file_logger, fingerprint, fsync_file, sha256_file, utc_run_id, write_json_atomic
 
 from src.config import COMPETITION, CUDAConfig, PreprocessingConfig, TrainingConfig, training_config
 from src.data import Record, Split
@@ -36,6 +35,14 @@ from src.models.model_evaluation import (
 from src.preprocessing import WhaleDataset, normalize_batch
 from src.preprocessing.augmentation import train_augment
 from src.steps import step
+from src.utils import (
+    file_logger,
+    fingerprint,
+    fsync_file,
+    sha256_file,
+    utc_run_id,
+    write_json_atomic,
+)
 
 logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]

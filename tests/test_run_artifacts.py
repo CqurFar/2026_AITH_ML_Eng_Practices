@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-import utils
 from PIL import Image
+from src import utils
 from src.config import training_config
 from src.data import Record, Split
 from src.models import model_building
