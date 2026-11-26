@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import utils
 from PIL import Image
 from src.config import training_config
 from src.data import Record, Split
@@ -118,29 +119,48 @@ def test_train_publishes_hashed_run_and_updates_latest_last(
         assert (config.artifacts_dir / filename).read_bytes() == (run_dir / filename).read_bytes()
 
 
-def test_publish_run_fsyncs_model_before_hashing_and_publication(
+def test_publish_run_fsyncs_every_staged_file_before_hashing_and_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _stub_training(tmp_path, monkeypatch)
     run_id = "20261126T120000000000Z"
     run_dir = config.artifacts_dir / "runs" / run_id
-    events: list[tuple[str, Path]] = []
-    real_fsync_file = model_building.fsync_file
+    staged_files = {
+        "model.pkl",
+        "metrics.json",
+        "oof.json",
+        "environment.json",
+        "splits_manifest.json",
+        "manifest.json",
+    }
+    durable: set[Path] = set()
+    real_fsync_file = utils.fsync_file
     real_sha256_file = model_building.sha256_file
     real_replace = Path.replace
 
     def tracked_fsync(path: Path) -> None:
+        path = Path(path)
         real_fsync_file(path)
-        events.append(("fsync", path))
+        durable.add(path)
 
     def tracked_sha256(path: Path, *args, **kwargs):
-        events.append(("hash", path))
+        path = Path(path)
+        assert path in durable, f"hashed before fsync: {path.name}"
         return real_sha256_file(path, *args, **kwargs)
 
     def tracked_replace(source, target):
-        events.append(("publish", Path(target)))
+        source, target = Path(source), Path(target)
+        if source in durable:
+            durable.add(target)
+        if target == run_dir:
+            missing = sorted(
+                filename for filename in staged_files if source / filename not in durable
+            )
+            assert not missing, f"published before fsync: {missing}"
+            durable.update(target / filename for filename in staged_files)
         return real_replace(source, target)
 
+    monkeypatch.setattr(utils, "fsync_file", tracked_fsync)
     monkeypatch.setattr(model_building, "fsync_file", tracked_fsync)
     monkeypatch.setattr(model_building, "sha256_file", tracked_sha256)
     monkeypatch.setattr(Path, "replace", tracked_replace)
@@ -149,14 +169,47 @@ def test_publish_run_fsyncs_model_before_hashing_and_publication(
         config, run_id, {"environment": {}}, {}, []
     )
 
-    model_path = next(
-        path for event, path in events if event == "hash" and path.name == "model.pkl"
-    )
-    assert ("fsync", model_path) in events
-    assert events.index(("fsync", model_path)) < events.index(("hash", model_path))
-    assert events.index(("hash", model_path)) < events.index(("publish", run_dir))
     assert published_dir == run_dir
     assert manifest_sha256 == hashlib.sha256((run_dir / "manifest.json").read_bytes()).hexdigest()
+
+
+def test_publish_compatibility_fsyncs_each_copy_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _stub_training(tmp_path, monkeypatch)
+    run_dir = config.artifacts_dir / "runs" / "run"
+    run_dir.mkdir(parents=True)
+    contents = {"model.pkl": b"model", "metrics.json": b"metrics", "oof.json": b"oof"}
+    for filename, content in contents.items():
+        (run_dir / filename).write_bytes(content)
+    events: list[tuple[str, str]] = []
+    real_fsync_file = model_building.fsync_file
+    real_replace = Path.replace
+
+    def tracked_fsync(path: Path) -> None:
+        real_fsync_file(path)
+        events.append(("fsync", path.name))
+
+    def tracked_replace(source, target):
+        events.append(("replace", Path(target).name))
+        return real_replace(source, target)
+
+    monkeypatch.setattr(model_building, "fsync_file", tracked_fsync)
+    monkeypatch.setattr(Path, "replace", tracked_replace)
+
+    model_building._publish_compatibility(config, run_dir)
+
+    assert events == [
+        ("fsync", "model.pkl"),
+        ("replace", "model.pkl"),
+        ("fsync", "metrics.json"),
+        ("replace", "metrics.json"),
+        ("fsync", "oof.json"),
+        ("replace", "oof.json"),
+    ]
+    assert {filename: (config.artifacts_dir / filename).read_bytes() for filename in contents} == (
+        contents
+    )
 
 
 def test_image_digest_change_changes_published_dataset_provenance(

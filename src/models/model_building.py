@@ -584,10 +584,12 @@ def _publish_run(
         shutil.copyfile(
             config.processed_dir / "splits_manifest.json", staged / "splits_manifest.json"
         )
+        fsync_file(staged / "splits_manifest.json")
         for filename, content in (("metrics.json", metrics), ("oof.json", oof)):
             (staged / filename).write_text(
                 json.dumps(content, indent=2, allow_nan=False) + "\n", encoding="utf-8"
             )
+            fsync_file(staged / filename)
         write_json_atomic(staged / "environment.json", artifact["environment"])
         filenames = (
             "model.pkl",
@@ -616,6 +618,7 @@ def _publish_compatibility(config: TrainingConfig, run_dir: Path) -> None:
         for filename in filenames:
             shutil.copyfile(run_dir / filename, staged / filename)
         for filename in filenames:
+            fsync_file(staged / filename)
             (staged / filename).replace(config.artifacts_dir / filename)
 
 
