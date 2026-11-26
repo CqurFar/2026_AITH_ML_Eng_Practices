@@ -41,6 +41,7 @@ def test_tiny_cpu_training_save_load_predict_parity(
         num_workers=0,
         pretrained=False,
         pin_memory=False,
+        prefetch_factor=2,
         unfrozen_blocks=0,
         dropout=0.0,
         label_smoothing=0.0,
@@ -55,6 +56,23 @@ def test_tiny_cpu_training_save_load_predict_parity(
         preprocessing.to_dict()
     )
     prepare(root, config.processed_dir, config.seed, config.n_folds)
+
+    building_datasets = []
+    building_loaders = []
+    real_dataset = model_building.WhaleDataset
+    real_loader = model_building.DataLoader
+
+    def capture_dataset(*args, **kwargs):
+        dataset = real_dataset(*args, **kwargs)
+        building_datasets.append(getattr(dataset, "normalize_on_device", False))
+        return dataset
+
+    def capture_loader(dataset, *args, **kwargs):
+        building_loaders.append(kwargs)
+        return real_loader(dataset, *args, **kwargs)
+
+    monkeypatch.setattr(model_building, "WhaleDataset", capture_dataset)
+    monkeypatch.setattr(model_building, "DataLoader", capture_loader)
 
     previous_threads = torch.get_num_threads()
     torch.set_num_threads(1)
@@ -77,6 +95,20 @@ def test_tiny_cpu_training_save_load_predict_parity(
         assert len(history) == 1
         assert math.isfinite(history[0]["loss"])
         assert not torch.equal(model.classifier[-1].weight.detach().cpu(), initial_head)
+
+        scores, targets = model_building.probabilities(
+            model, rows, root / "train", config, torch.device("cpu"), preprocessing
+        )
+        assert scores.shape == (len(rows), len(classes))
+        assert targets == [identity for _, identity in rows]
+        assert building_datasets == [True, True]
+        for options in building_loaders:
+            assert options["num_workers"] == config.num_workers
+            assert options["pin_memory"] is config.pin_memory
+            assert options["persistent_workers"] is (config.num_workers > 0)
+            assert options["prefetch_factor"] == (
+                config.prefetch_factor if config.num_workers > 0 else None
+            )
 
         artifact = model_building.model_artifact(
             model,
@@ -107,6 +139,22 @@ def test_tiny_cpu_training_save_load_predict_parity(
             for candidates in ranked_predictions(direct_probabilities, classes, 0.5)
         ]
 
+        prediction_datasets = []
+        prediction_loaders = []
+        real_prediction_dataset = model_prediction.WhaleDataset
+        real_prediction_loader = model_prediction.DataLoader
+
+        def capture_prediction_dataset(*args, **kwargs):
+            dataset = real_prediction_dataset(*args, **kwargs)
+            prediction_datasets.append(getattr(dataset, "normalize_on_device", False))
+            return dataset
+
+        def capture_prediction_loader(dataset, *args, **kwargs):
+            prediction_loaders.append(kwargs)
+            return real_prediction_loader(dataset, *args, **kwargs)
+
+        monkeypatch.setattr(model_prediction, "WhaleDataset", capture_prediction_dataset)
+        monkeypatch.setattr(model_prediction, "DataLoader", capture_prediction_loader)
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
         output = model_prediction.predict(config, tmp_path / "submission.csv")
         with output.open(encoding="utf-8", newline="") as file:
@@ -117,6 +165,14 @@ def test_tiny_cpu_training_save_load_predict_parity(
         assert submission == [
             {"Image": name, "Id": candidates} for name, candidates in zip(test_names, expected_ids)
         ]
+        assert prediction_datasets == [True]
+        for options in prediction_loaders:
+            assert options["num_workers"] == config.num_workers
+            assert options["pin_memory"] is config.pin_memory
+            assert options["persistent_workers"] is (config.num_workers > 0)
+            assert options["prefetch_factor"] == (
+                config.prefetch_factor if config.num_workers > 0 else None
+            )
         model_prediction.validate_submission(submission, test_names, classes)
     finally:
         torch.set_num_threads(previous_threads)

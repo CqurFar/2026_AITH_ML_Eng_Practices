@@ -33,7 +33,7 @@ from src.models.model_evaluation import (
     select_threshold,
     summarize,
 )
-from src.preprocessing import WhaleDataset
+from src.preprocessing import WhaleDataset, normalize_batch
 from src.steps import step
 
 logger = logging.getLogger(__name__)
@@ -332,7 +332,13 @@ def fit_model(
     records = [
         Record(name, identity, config.data_dir / "train" / name, "") for name, identity in rows
     ]
-    dataset = WhaleDataset(records, preprocessing, augment=True, train_dir=config.train_dir)
+    dataset = WhaleDataset(
+        records,
+        preprocessing,
+        augment=True,
+        train_dir=config.train_dir,
+        normalize_on_device=True,
+    )
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size,
@@ -341,6 +347,7 @@ def fit_model(
         num_workers=config.num_workers,
         pin_memory=config.pin_memory,
         persistent_workers=config.num_workers > 0,
+        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else None,
     )
     model = cast(MobileNetV3, make_model(len(classes), config.pretrained, config.dropout)).to(
         device
@@ -387,6 +394,7 @@ def fit_model(
                 for block in unfrozen:
                     block.eval()
             images = images.to(device, non_blocking=use_cuda)
+            images = normalize_batch(images, preprocessing, device)
             label_ids = torch.tensor(
                 [class_index[label] for label in labels], dtype=torch.long, device=device
             )
@@ -436,19 +444,25 @@ def probabilities(
         raise ValueError("Inference requires at least one row")
     use_cuda = device.type == "cuda"
     records = [Record(name, identity, directory / name, "") for name, identity in rows]
-    dataset = WhaleDataset(records, preprocessing, train_dir=config.train_dir)
+    dataset = WhaleDataset(
+        records, preprocessing, train_dir=config.train_dir, normalize_on_device=True
+    )
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size,
         num_workers=config.num_workers,
         pin_memory=config.pin_memory,
+        persistent_workers=config.num_workers > 0,
+        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else None,
     )
     model.eval()
     result = None
     targets: list[str] = []
     for images, labels in loader:
         with torch.inference_mode():
-            batch = model(images.to(device, non_blocking=use_cuda)).softmax(dim=1)
+            images = images.to(device, non_blocking=use_cuda)
+            images = normalize_batch(images, preprocessing, device)
+            batch = model(images).softmax(dim=1)
         if result is None:
             result = torch.empty((len(dataset), batch.shape[1]), dtype=batch.dtype, device="cpu")
         offset = len(targets)

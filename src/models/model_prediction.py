@@ -9,7 +9,7 @@ from src.config import PreprocessingConfig, TrainingConfig, training_config
 from src.data import Record
 from src.models.model_building import make_model
 from src.models.model_evaluation import ranked_predictions
-from src.preprocessing import WhaleDataset
+from src.preprocessing import WhaleDataset, normalize_batch
 from src.steps import step
 
 
@@ -53,12 +53,21 @@ def predict(config: TrainingConfig | None = None, output_path: Path | None = Non
     model.eval()
     preprocessing = PreprocessingConfig.from_dict(checkpoint["preprocessing"])
     records = [Record(name, "", test_dir / name, "") for name in names]
-    dataset = WhaleDataset(records, preprocessing)
-    loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=config.num_workers)
+    dataset = WhaleDataset(records, preprocessing, normalize_on_device=True)
+    loader = DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        persistent_workers=config.num_workers > 0,
+        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else None,
+    )
     predictions = []
     with torch.inference_mode():
         for images, _ in loader:
-            probabilities = model(images.to(device)).softmax(dim=1).cpu()
+            images = images.to(device, non_blocking=device.type == "cuda")
+            images = normalize_batch(images, preprocessing, device)
+            probabilities = model(images).softmax(dim=1).cpu()
             predictions.extend(ranked_predictions(probabilities, classes, checkpoint["threshold"]))
     rows = [{"Image": name, "Id": " ".join(labels)} for name, labels in zip(names, predictions)]
     validate_submission(rows, names, classes)

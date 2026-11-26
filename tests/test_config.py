@@ -81,6 +81,20 @@ def test_child_paths_follow_custom_roots(tmp_path: Path) -> None:
     assert config.logs_dir == tmp_path / "artifacts" / "logs"
 
 
+def test_training_loader_defaults() -> None:
+    config = config_module.TrainingConfig()
+
+    assert config.num_workers == 8
+    assert config.pin_memory is True
+    assert config.prefetch_factor == 4
+
+
+@pytest.mark.parametrize("prefetch_factor", [0, -1])
+def test_training_config_rejects_nonpositive_prefetch_factor(prefetch_factor: int) -> None:
+    with pytest.raises(ValueError, match="prefetch_factor"):
+        config_module.TrainingConfig(prefetch_factor=prefetch_factor)
+
+
 @pytest.mark.parametrize(
     ("raw", "processed", "artifacts"),
     [

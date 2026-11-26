@@ -10,7 +10,7 @@ from src.preprocessing.transforms import (
     load_image,
     load_prepared,
     prepared_file,
-    preprocess_image,
+    prepared_tensor,
     to_model_tensor,
     validate_preprocessing_manifest,
 )
@@ -23,11 +23,14 @@ class WhaleDataset(Dataset):
         config: PreprocessingConfig,
         augment: bool = False,
         train_dir: Path | None = None,
+        *,
+        normalize_on_device: bool = False,
     ):
         self.records = records
         self.config = config
         self.augmentation = train_augment() if augment else None
         self.train_dir = train_dir
+        self.normalize_on_device = normalize_on_device
         if train_dir is not None:
             validate_preprocessing_manifest(train_dir, config)
 
@@ -40,9 +43,11 @@ class WhaleDataset(Dataset):
             tensor = load_prepared(prepared_file(self.train_dir, record.image))
             if self.augmentation is not None:
                 tensor = self.augmentation(tensor)
-            return to_model_tensor(tensor, self.config), record.identity
-        image = load_image(record.path)
-        if self.augmentation is not None:
-            image = self.augmentation(image)
-        tensor = preprocess_image(image, self.config)
+        else:
+            image = load_image(record.path)
+            if self.augmentation is not None:
+                image = self.augmentation(image)
+            tensor = prepared_tensor(image, self.config)
+        if not self.normalize_on_device:
+            tensor = to_model_tensor(tensor, self.config)
         return tensor, record.identity

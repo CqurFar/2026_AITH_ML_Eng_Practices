@@ -48,8 +48,8 @@ def normalize(
 ) -> torch.Tensor:
     if any(value <= 0 for value in std):
         raise ValueError("normalization std must be positive")
-    mean_t = torch.tensor(mean, dtype=tensor.dtype).view(-1, 1, 1)
-    std_t = torch.tensor(std, dtype=tensor.dtype).view(-1, 1, 1)
+    mean_t = torch.tensor(mean, dtype=tensor.dtype, device=tensor.device).view(-1, 1, 1)
+    std_t = torch.tensor(std, dtype=tensor.dtype, device=tensor.device).view(-1, 1, 1)
     return (tensor - mean_t) / std_t
 
 
@@ -65,6 +65,17 @@ def prepared_tensor(image: Image.Image, config: PreprocessingConfig) -> torch.Te
 
 def to_model_tensor(tensor: torch.Tensor, config: PreprocessingConfig) -> torch.Tensor:
     return normalize(tensor.to(torch.float32) / 255.0, config.mean, config.std)
+
+
+def normalize_batch(
+    tensor: torch.Tensor, config: PreprocessingConfig, device: torch.device
+) -> torch.Tensor:
+    tensor = tensor.to(device=device)
+    if tensor.dtype == torch.uint8:
+        tensor = tensor.to(torch.float32) / 255.0
+    else:
+        tensor = tensor.to(torch.float32)
+    return normalize(tensor, config.mean, config.std)
 
 
 def preprocess_image(image: Image.Image, config: PreprocessingConfig) -> torch.Tensor:

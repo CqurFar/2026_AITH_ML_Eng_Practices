@@ -180,6 +180,13 @@ class TrainingConfig:
     )
     pretrained: bool = field(default_factory=lambda: bool(_section("training")["pretrained"]))
     pin_memory: bool = field(default_factory=lambda: bool(_section("training")["pin_memory"]))
+    prefetch_factor: int = field(
+        default_factory=lambda: int(_section("training")["prefetch_factor"])
+    )
+
+    def __post_init__(self) -> None:
+        if type(self.prefetch_factor) is not int or self.prefetch_factor < 1:
+            raise ValueError("prefetch_factor must be a positive integer")
 
 
 def training_config(

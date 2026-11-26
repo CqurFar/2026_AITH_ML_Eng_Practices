@@ -3,7 +3,7 @@ import pytest
 import torch
 from src.config import PreprocessingConfig
 from src.data import Record
-from src.preprocessing import WhaleDataset, bake, load_image, preprocess_image
+from src.preprocessing import WhaleDataset, bake, load_image, normalize_batch, preprocess_image
 from torch.utils.data import DataLoader
 
 from tests.helpers.synthetic_data import make_synthetic_dataset
@@ -29,6 +29,7 @@ class TestWhaleDataset:
         dataset = WhaleDataset(records, config)
         tensor, label = dataset[0]
         assert tensor.shape == (3, config.target_height, config.target_width)
+        assert tensor.dtype == torch.float32
         assert label == records[0].identity
 
     def test_augment_mode(self, dataset_root):
@@ -51,6 +52,46 @@ class TestWhaleDataset:
         assert torch.equal(tensor, direct)
         dataset = WhaleDataset(records, config, augment=True, train_dir=prepared)
         assert dataset[0][0].shape == (3, config.target_height, config.target_width)
+
+    @pytest.mark.parametrize("baked", [False, True])
+    def test_device_normalization_returns_uint8_chw(self, tmp_path, dataset_root, baked: bool):
+        config = PreprocessingConfig()
+        records = _records(dataset_root, limit=2)
+        prepared = tmp_path / "train_baked"
+        if baked:
+            assert bake(records, config, train_dir=prepared) == 2
+        train_dir = prepared if baked else None
+        reference = WhaleDataset(records, config, train_dir=train_dir)[0][0]
+        dataset = WhaleDataset(records, config, train_dir=train_dir, normalize_on_device=True)
+
+        tensor, label = dataset[0]
+
+        assert tensor.dtype == torch.uint8
+        assert tensor.shape == (3, config.target_height, config.target_width)
+        assert label == records[0].identity
+        assert torch.equal(normalize_batch(tensor, config, torch.device("cpu")), reference)
+
+    @pytest.mark.parametrize("baked", [False, True])
+    def test_device_normalization_augmentation_preserves_uint8(
+        self, tmp_path, dataset_root, baked: bool
+    ):
+        config = PreprocessingConfig()
+        records = _records(dataset_root, limit=2)
+        prepared = tmp_path / "train_baked"
+        if baked:
+            assert bake(records, config, train_dir=prepared) == 2
+        dataset = WhaleDataset(
+            records,
+            config,
+            augment=True,
+            train_dir=prepared if baked else None,
+            normalize_on_device=True,
+        )
+
+        tensor, _ = dataset[0]
+
+        assert tensor.dtype == torch.uint8
+        assert tensor.shape == (3, config.target_height, config.target_width)
 
     def test_dataloader_batches(self, dataset_root):
         config = PreprocessingConfig()

@@ -65,6 +65,7 @@ def test_direct_baked_and_prediction_tensors_match(
         training_config(data_dir=image_path.parent.parent, artifacts_dir=artifacts_dir),
         batch_size=1,
         num_workers=0,
+        pin_memory=False,
     )
 
     captured: list[torch.Tensor] = []

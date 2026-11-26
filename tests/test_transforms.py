@@ -6,9 +6,11 @@ from src.config import PreprocessingConfig
 from src.preprocessing.transforms import (
     load_image,
     normalize,
+    normalize_batch,
     pad_to_size,
     preprocess_image,
     resize_fit,
+    to_model_tensor,
 )
 from torchvision.transforms import InterpolationMode
 
@@ -96,6 +98,50 @@ class TestNormalize:
     def test_zero_std_rejected(self):
         with pytest.raises(ValueError):
             normalize(torch.zeros(3, 2, 2), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+
+
+class TestNormalizeBatch:
+    @pytest.mark.parametrize("batched", [False, True])
+    def test_uint8_matches_model_tensor(self, batched: bool) -> None:
+        config = PreprocessingConfig()
+        tensor = torch.arange(36, dtype=torch.uint8).reshape(2, 3, 2, 3)
+        image = tensor[0]
+        expected = to_model_tensor(image, config)
+        source = tensor if batched else image
+        if batched:
+            expected = torch.stack((expected, to_model_tensor(tensor[1], config)))
+
+        result = normalize_batch(source, config, torch.device("cpu"))
+
+        assert result.dtype == torch.float32
+        assert result.device.type == "cpu"
+        torch.testing.assert_close(result, expected, rtol=0, atol=0)
+
+    def test_float_unit_range_is_not_scaled_again(self) -> None:
+        config = PreprocessingConfig()
+        uint8 = torch.tensor(
+            [
+                [[0, 64, 128, 255]],
+                [[255, 128, 64, 0]],
+                [[32, 96, 160, 224]],
+            ]
+        )
+        expected = to_model_tensor(uint8, config)
+
+        result = normalize_batch(uint8.float() / 255.0, config, torch.device("cpu"))
+
+        torch.testing.assert_close(result, expected, rtol=0, atol=0)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+    def test_cuda_matches_cpu(self) -> None:
+        config = PreprocessingConfig()
+        tensor = torch.arange(36, dtype=torch.uint8).reshape(2, 3, 2, 3)
+        expected = normalize_batch(tensor, config, torch.device("cpu"))
+
+        result = normalize_batch(tensor, config, torch.device("cuda"))
+
+        assert result.device.type == "cuda"
+        torch.testing.assert_close(result.cpu(), expected, rtol=1e-6, atol=1e-6)
 
 
 class TestPreprocessImage:
